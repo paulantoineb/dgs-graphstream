@@ -164,10 +164,14 @@ def write_dgs(output, partition, graph, colour_map):
             outf.write("st {}\n".format(st))
             st += 1
 
+def create_output_dir(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
 
 def gen_dgs_files(network, assignments_f, output, partitions_num, colour_map):
     G = read_metis(network)
     assignments = read_assignments(assignments_f)
+    create_output_dir(output)
 
     for p in range(0, partitions_num):
         nodes = [i for i,x in enumerate(assignments) if x == p]
