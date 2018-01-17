@@ -1,3 +1,3 @@
 Manifest-Version: 1.0
 X-COMMENT: Main-Class will be added automatically by build
-
+Class-Path: ../libs/graphstream/gs-algo-1.3-javadoc.jar ../libs/graphstream/gs-algo-1.3-sources.jar ../libs/graphstream/gs-algo-1.3.jar ../libs/graphstream/gs-core-1.3-javadoc.jar ../libs/graphstream/gs-core-1.3-sources.jar ../libs/graphstream/gs-core-1.3.jar ../libs/graphstream/gs-ui-1.3-javadoc.jar ../libs/graphstream/gs-ui-1.3-sources.jar ../libs/graphstream/gs-ui-1.3.jar dist/dgs-graphstream.jar
