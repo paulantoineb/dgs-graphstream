@@ -91,6 +91,10 @@ def read_metis(DATA_FILENAME):
     assert (m_edges == G.number_of_edges()), "Expected {} edges, networkx graph contains {} edges".format(m_edges, G.number_of_edges())
 
     return G
+    
+def read_dot(network):
+    print(network)
+    return nx.nx_agraph.read_dot(network)
 
 def read_assignments(assignments):
     with open(assignments, 'r') as f:
@@ -148,9 +152,13 @@ def write_dgs(output, partition, graph, colour_map):
         nodes_added = []
         edges_added = []
         for n in graph.nodes_iter(data=True):
-            colour = 'black'
-            if n[0] in colour_map:
-                colour = colour_map[n[0]]
+            
+            if colour_map:
+                colour = 'black'
+                if n[0] in colour_map:
+                    colour = colour_map[n[0]]
+            else:
+                colour = n[1]["fillcolor"] # get color from attributes
 
             outf.write("an {} c='{}'\n".format(n[0], colour))
             nodes_added += [n[0]]
@@ -164,20 +172,26 @@ def write_dgs(output, partition, graph, colour_map):
             outf.write("st {}\n".format(st))
             st += 1
 
-def create_output_dir(directory):
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+def create_or_clean_output_dir(directory):
+    if os.path.exists(directory):
+        shutil.rmtree(directory) # delete folder if it exists
+    os.makedirs(directory) # create folder
 
-def gen_dgs_files(network, assignments_f, output, partitions_num, colour_map):
-    G = read_metis(network)
+def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour_map):
+    if format is 'metis':
+        G = read_metis(network)
+    else:
+        G = read_dot(network)
     assignments = read_assignments(assignments_f)
-    create_output_dir(output)
-
-    for p in range(0, partitions_num):
-        nodes = [i for i,x in enumerate(assignments) if x == p]
-        Gsub = G.subgraph(nodes)
-
-        write_dgs(output, p, Gsub, colour_map)
+    create_or_clean_output_dir(output)
+    
+    if partitions_num == 1:
+        write_dgs(output, 0, G, colour_map) # ignore assignments file if single partition (TEMPORARY)
+    else:
+        for p in range(0, partitions_num):
+            nodes = [i for i,x in enumerate(assignments) if x == p]
+            Gsub = G.subgraph(nodes)
+            write_dgs(output, p, Gsub, colour_map)
 
 def gen_frames(output, partitions_num):
 
@@ -207,8 +221,12 @@ def join_images(output, assignments_f, partitions_num):
     #tiles = [frames[f][0] for f in frames]
     tiles = ['frame_blank.png'] * partitions_num
 
+    if partitions_num == 1:
+        assignments = [0] * frames_max # ignore assignments file if single partition (TEMPORARY)
+    else:
+        assignments = read_assignments(assignments_f)
+    
     f = 0
-    assignments = read_assignments(assignments_f)
     for a in assignments:
         if a == -1: # XXX remove > 3
             continue
@@ -262,11 +280,12 @@ if __name__ == '__main__':
         GraphStream to animate each frame, finally frames are stitched together.'''
     )
     parser.add_argument('network',
-                        help='Network file in METIS format')
+                        help='Input network file')
     parser.add_argument('assignments',
-                        help='Partition assignsments list')
+                        help='Partition assignments list')
     parser.add_argument('output',
                         help='Output directory')
+    parser.add_argument('--format', choices=['metis', 'dot'], default='metis', help='Format of the input network')
     parser.add_argument('--num-partitions', '-n', type=int, default=4, metavar='N',
                         help='Number of partitions')
 
@@ -284,10 +303,14 @@ if __name__ == '__main__':
         all_args = True
 
     if args.dgs or all_args:
-        print("Generating colour map...")
-        colour_map = gen_colour_map(args.num_partitions)
+        if args.format is "metis":
+            print("Generating colour map...")
+            colour_map = gen_colour_map(args.num_partitions)
+        else:
+            print("Using colours from input file")
+            colour_map = None
         print("Generating GraphStream DGS files...")
-        gen_dgs_files(args.network, args.assignments, args.output, args.num_partitions, colour_map)
+        gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, colour_map)
         print("Done")
 
     if args.frames or all_args:
