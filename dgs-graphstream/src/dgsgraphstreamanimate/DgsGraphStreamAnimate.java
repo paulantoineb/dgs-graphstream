@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.lang.reflect.Field;
 import org.graphstream.graph.Node;
 import org.graphstream.graph.implementations.DefaultGraph;
 import org.graphstream.stream.ProxyPipe;
@@ -18,9 +19,12 @@ import org.graphstream.stream.file.FileSinkImages.OutputType;
 import org.graphstream.stream.file.FileSinkImages.OutputPolicy;
 import org.graphstream.stream.file.FileSinkImages.LayoutPolicy;
 import org.graphstream.stream.file.FileSinkImages.RendererType;
+import org.graphstream.stream.file.FileSinkDOT;
 import org.graphstream.stream.SinkAdapter;
 import org.graphstream.ui.layout.springbox.implementations.LinLog;
 import org.graphstream.ui.view.Viewer;
+import org.graphstream.ui.graphicGraph.GraphicGraph;
+import org.graphstream.ui.graphicGraph.GraphicNode;
 
 /**
  *
@@ -61,6 +65,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         fsi.setQuality(Quality.HIGH);
         fsi.setRenderer(RendererType.SCALA);
         fsi.setStyleSheet("url('style.css')");
+        
 
         if (linlog) {
             // chain: dgs -> g -> layout -> fsi
@@ -68,7 +73,6 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             this.g.addSink(layout);
             layout.addAttributeSink(this.g);
             layout.addSink(fsi);
-            
         }
         else {
             // chain: dgs -> g -> fsi
@@ -99,12 +103,59 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
                 if (display) {
                     pipe.pump();
                 }
-            }
+            }    
             dgs.end();
             fsi.end();
         } catch (IOException e1) {
             e1.printStackTrace();
             System.exit(1);
+        }
+        
+        try {
+            String outputFilePath = inputDGS.split("\\.(?=[^\\.]+$)")[0]+".dot"; // replace ".dhs" by ".dot"
+            exportGraphAsDotFile(this.g, getGraphicGraph(fsi), outputFilePath);
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+    
+    /**
+     * Export graph as Graphviz dot file
+     */
+    private void exportGraphAsDotFile(DefaultGraph graph, GraphicGraph graphicGraph, String outputFilePath) throws IOException {          
+        // Add position attribute to DefaultGraph from GraphicGraph
+        for (Node node : graph) {
+            GraphicNode graphics_graph_node = graphicGraph.getNode(node.getId());
+            node.addAttribute("pos", "["+graphics_graph_node.x+","+graphics_graph_node.y+"]");
+        }
+        // Export graph as dot file 
+        FileSinkDOT dot_sink = new FileSinkDOT();
+        dot_sink.writeAll(graph, outputFilePath); 
+    }
+    
+    /**
+     * Get GraphicGraph instance from FileSinkImages (only place where to get a node's position)
+     */
+    private GraphicGraph getGraphicGraph(FileSinkImages fsi) throws NoSuchFieldException, IllegalAccessException {
+        Field field = getField(fsi.getClass(), "gg");
+        field.setAccessible(true);
+        return (GraphicGraph)field.get(fsi);
+    }
+    
+    /**
+     * Get class field using reflection
+     */
+    private static Field getField(Class clazz, String fieldName) throws NoSuchFieldException {
+        try {
+            return clazz.getDeclaredField(fieldName);
+        } catch (NoSuchFieldException e) {
+            Class superClass = clazz.getSuperclass();
+            if (superClass == null) {
+                throw e;
+            } else {
+                return getField(superClass, fieldName);
+            }
         }
     }
     
