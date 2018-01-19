@@ -10,6 +10,7 @@ import colorsys
 import argparse
 import itertools
 import subprocess
+import random
 import networkx as nx
 
 DGSGS_JAR = 'dgs-graphstream/dist/dgs-graphstream.jar'
@@ -193,12 +194,12 @@ def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour
             Gsub = G.subgraph(nodes)
             write_dgs(output, p, Gsub, colour_map)
 
-def gen_frames(output, partitions_num):
+def gen_frames(output, partitions_num, layout, seed):
 
     for p in range(0, partitions_num):
         dgs = os.path.join(output, 'partition_{}.dgs'.format(p))
         out = os.path.join(output, 'frames_partition/p{}_'.format(p))
-        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out]
+        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed)]
         retval = subprocess.call(
             args, cwd='.',
             stderr=subprocess.STDOUT)
@@ -288,7 +289,10 @@ if __name__ == '__main__':
     parser.add_argument('--format', choices=['metis', 'dot'], default='metis', help='Format of the input network')
     parser.add_argument('--num-partitions', '-n', type=int, default=4, metavar='N',
                         help='Number of partitions')
-
+    parser.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
+                        help='Graph layout')
+    parser.add_argument('--seed', '-s', type=int, default=random.randint(1, 10**6), metavar='S',
+                        help='Seed for graph layout')
     parser.add_argument('--dgs', action='store_true', default=False,
                         help='Generate GraphStream DGS file')
     parser.add_argument('--frames', action='store_true', default=False,
@@ -315,7 +319,7 @@ if __name__ == '__main__':
 
     if args.frames or all_args:
         print("Using GraphStream to generate frames...")
-        gen_frames(args.output, args.num_partitions)
+        gen_frames(args.output, args.num_partitions, args.layout, args.seed)
         print("Done.")
 
     if args.join or all_args:

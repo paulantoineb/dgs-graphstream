@@ -22,6 +22,8 @@ import org.graphstream.stream.file.FileSinkImages.RendererType;
 import org.graphstream.stream.file.FileSinkDOT;
 import org.graphstream.stream.SinkAdapter;
 import org.graphstream.ui.layout.springbox.implementations.LinLog;
+import org.graphstream.ui.layout.springbox.implementations.SpringBox;
+import org.graphstream.ui.layout.springbox.BarnesHutLayout ;
 import org.graphstream.ui.view.Viewer;
 import org.graphstream.ui.graphicGraph.GraphicGraph;
 import org.graphstream.ui.graphicGraph.GraphicNode;
@@ -35,9 +37,14 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     private DefaultGraph g;
     private FileSinkImages fsi;
     private ProxyPipe pipe;
-    private LinLog layout;
+    private BarnesHutLayout layout;
+    
+    private enum LayoutType {
+        LinLog,
+        SpringBox
+    }
         
-    private void AnimateDgs(String inputDGS, String outputDirectory, Boolean linlog, Boolean display)
+    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, long seed, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
@@ -47,38 +54,20 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         this.g = new DefaultGraph("graph");
         this.g.addAttribute("ui.stylesheet", "url('style.css')");
         
-        if (linlog) {
-            layout = new LinLog(false);
-            double a = 0;
-            double r = -1.9;
-            double force = 3;
-
-            layout.configure(a, r, true, force);
-            layout.setQuality(1);
-            layout.setBarnesHutTheta(0.5);
-            //layout.setStabilizationLimit(0);
-        }
+        layout = CreateLayout(layout_type, seed);
         
         fsi = new FileSinkImages(OutputType.PNG, Resolutions.HD720);
         fsi.setOutputPolicy(OutputPolicy.BY_STEP);
-        fsi.setLayoutPolicy(LayoutPolicy.COMPUTED_FULLY_AT_NEW_IMAGE);
+        fsi.setLayoutPolicy(LayoutPolicy.NO_LAYOUT);
         fsi.setQuality(Quality.HIGH);
         fsi.setRenderer(RendererType.SCALA);
         fsi.setStyleSheet("url('style.css')");
         
-
-        if (linlog) {
-            // chain: dgs -> g -> layout -> fsi
-            dgs.addSink(this.g);
-            this.g.addSink(layout);
-            layout.addAttributeSink(this.g);
-            layout.addSink(fsi);
-        }
-        else {
-            // chain: dgs -> g -> fsi
-            dgs.addSink(this.g);
-            this.g.addSink(fsi);
-        }
+        // chain: dgs -> g -> layout -> fsi
+        dgs.addSink(this.g);
+        this.g.addSink(layout);
+        layout.addAttributeSink(this.g);
+        layout.addSink(fsi);
 
         dgs.addAttributeSink(this);
 
@@ -96,9 +85,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             dgs.begin(inputDGS);
             while (dgs.nextEvents()) {
                 
-                if (linlog) {
-                    layout.compute();
-                }
+                layout.compute();
 
                 if (display) {
                     pipe.pump();
@@ -117,6 +104,29 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         } catch (Exception e) {
             e.printStackTrace();
             System.exit(1);
+        }
+    }
+    
+    /**
+     * Create graph layout
+     */
+    private BarnesHutLayout CreateLayout(LayoutType layout_type, long seed) {
+        if (layout_type == LayoutType.LinLog) {
+            LinLog layout = new LinLog(false, new Random(seed));
+            double a = 0;
+            double r = -1.9;
+            double force = 3;
+
+            layout.configure(a, r, true, force);
+            layout.setQuality(1);
+            layout.setBarnesHutTheta(0.5);
+            //layout.setStabilizationLimit(0);
+            
+            return layout;
+        } else {
+            SpringBox layout = new SpringBox(false, new Random(seed));
+            layout.setQuality(1);
+            return layout;
         }
     }
     
@@ -213,25 +223,30 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             System.out.println("usage: DgsGraphStreamAnimate.jar [OPTIONS]...");
             System.out.println("-dgs <arg>      input GraphStream DGS file");
             System.out.println("-out <arg>      frame filenames are prepended with this path");
-            System.out.println("-layout <arg>   layout option to use. options: [default|linlog]");
+            System.out.println("-layout <arg>   layout type to use. options: [springbox|linlog]. default: springbox");
+            System.out.println("-seed <arg>     random seed for the layout");
             System.out.println("-display screen layout option to use. options: [screen]");
             System.out.println("-h,-help        display this help and exit");
             System.exit(1);
         }
         
-        Boolean linlog = false;
-        Boolean display = false;
+        LayoutType layout_type = LayoutType.SpringBox;      
         if (params.containsKey("layout") && params.get("layout").get(0).equals("linlog")) {
-            linlog = true;
+            layout_type = LayoutType.LinLog;
         }
+        Boolean display = false;
         if (params.containsKey("display") && params.get("display").get(0).equals("screen")) {
             display = true;
+        }
+        long seed = System.currentTimeMillis(); // random seed
+        if (params.containsKey("seed")) {
+            seed = Long.parseLong(params.get("seed").get(0));
         }
         
         try {
             System.out.println(params.get("dgs").get(0));
             DgsGraphStreamAnimate a = new DgsGraphStreamAnimate();
-            a.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), linlog, display);
+            a.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, seed, display);
         } catch(IOException e) {
             e.printStackTrace();
         }
