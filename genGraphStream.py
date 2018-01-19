@@ -94,8 +94,20 @@ def read_metis(DATA_FILENAME):
     return G
     
 def read_dot(network):
-    print(network)
     return nx.nx_agraph.read_dot(network)
+    
+def remove_string_from_file(file, string):
+    f = open(file,'r')
+    filedata = f.read()
+    f.close()
+    newdata = filedata.replace(string,"")
+    f = open(file,'w')
+    f.write(newdata)
+    f.close()
+        
+def read_pajek(network):
+    remove_string_from_file(network, "ic ") # remove "ic" attribute from pajek file so that nx.read_pajek reads the node color (it only reads the first 7 attributes and the color is the 8th)
+    return nx.read_pajek(network)
 
 def read_assignments(assignments):
     with open(assignments, 'r') as f:
@@ -140,7 +152,7 @@ def gen_colour_map(partitions_num):
 
     return colour_map
 
-def write_dgs(output, partition, graph, colour_map):
+def write_dgs(output, partition, graph, colour_map, colour_attr):
 
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
 
@@ -153,13 +165,12 @@ def write_dgs(output, partition, graph, colour_map):
         nodes_added = []
         edges_added = []
         for n in graph.nodes_iter(data=True):
-            
             if colour_map:
                 colour = 'black'
                 if n[0] in colour_map:
                     colour = colour_map[n[0]]
             else:
-                colour = n[1]["fillcolor"] # get color from attributes
+                colour = n[1][colour_attr] # get color from attributes
 
             outf.write("an {} c='{}'\n".format(n[0], colour))
             nodes_added += [n[0]]
@@ -179,20 +190,26 @@ def create_or_clean_output_dir(directory):
     os.makedirs(directory) # create folder
 
 def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour_map):
-    if format is 'metis':
+    if format == 'metis':
         G = read_metis(network)
-    else:
+        colour_attr = "" # use colour_map
+    elif format == 'dot':
         G = read_dot(network)
+        colour_attr = "fillcolor"
+    else:
+        G = read_pajek(network)
+        colour_attr = "box"
+        
     assignments = read_assignments(assignments_f)
     create_or_clean_output_dir(output)
     
     if partitions_num == 1:
-        write_dgs(output, 0, G, colour_map) # ignore assignments file if single partition (TEMPORARY)
+        write_dgs(output, 0, G, colour_map, colour_attr) # ignore assignments file if single partition (TEMPORARY)
     else:
         for p in range(0, partitions_num):
             nodes = [i for i,x in enumerate(assignments) if x == p]
             Gsub = G.subgraph(nodes)
-            write_dgs(output, p, Gsub, colour_map)
+            write_dgs(output, p, Gsub, colour_map, colour_attr)
 
 def gen_frames(output, partitions_num, layout, seed):
 
@@ -286,7 +303,7 @@ if __name__ == '__main__':
                         help='Partition assignments list')
     parser.add_argument('output',
                         help='Output directory')
-    parser.add_argument('--format', choices=['metis', 'dot'], default='metis', help='Format of the input network')
+    parser.add_argument('--format', choices=['metis', 'dot', 'pajek'], default='metis', help='Format of the input network')
     parser.add_argument('--num-partitions', '-n', type=int, default=4, metavar='N',
                         help='Number of partitions')
     parser.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
