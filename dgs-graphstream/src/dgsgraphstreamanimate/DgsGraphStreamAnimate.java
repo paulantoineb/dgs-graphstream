@@ -157,7 +157,9 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         // Add position attribute to DefaultGraph from GraphicGraph
         for (Node node : graph) {
             GraphicNode graphics_graph_node = graphicGraph.getNode(node.getId());
-            node.addAttribute("pos", "["+graphics_graph_node.x+","+graphics_graph_node.y+"]");
+            node.addAttribute("pos", graphics_graph_node.x*100+","+graphics_graph_node.y*100);
+            node.addAttribute("height", 0.5);
+            node.addAttribute("width", 0.5);
         }
         // Export graph as dot file 
         FileSinkDOT dot_sink = new FileSinkDOT();

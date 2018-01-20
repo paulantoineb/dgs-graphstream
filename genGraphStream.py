@@ -171,7 +171,10 @@ def write_dgs(output, partition, graph, colour_map, colour_attr):
                 if n[0] in colour_map:
                     colour = colour_map[n[0]]
             else:
-                colour = n[1][colour_attr] # get color from attributes
+                if colour_attr in n[1]:
+                    colour = n[1][colour_attr] # get color from attributes
+                else:
+                    colour = 'black'
 
             outf.write("an {} c='{}'\n".format(n[0], colour))
             nodes_added += [n[0]]
