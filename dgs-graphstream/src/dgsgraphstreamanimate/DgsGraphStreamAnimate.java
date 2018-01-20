@@ -43,8 +43,13 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         LinLog,
         SpringBox
     }
+    
+    private enum Mode {
+        Images,
+        DotFile
+    }
         
-    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, long seed, Boolean display)
+    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, long seed, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
@@ -80,30 +85,45 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             pipe = viewer.newThreadProxyOnGraphicGraph();
         }
         
-        fsi.begin(outputDirectory);
-        try {
-            dgs.begin(inputDGS);
-            while (dgs.nextEvents()) {
-                
-                layout.compute();
+        if (mode == Mode.Images) {
+            fsi.begin(outputDirectory);
+            try {
+                dgs.begin(inputDGS);
+                while (dgs.nextEvents()) {
+                    
+                    layout.compute();
 
-                if (display) {
-                    pipe.pump();
-                }
-            }    
-            dgs.end();
-            fsi.end();
-        } catch (IOException e1) {
-            e1.printStackTrace();
-            System.exit(1);
-        }
-        
-        try {
-            String outputFilePath = inputDGS.split("\\.(?=[^\\.]+$)")[0]+".dot"; // replace ".dhs" by ".dot"
-            exportGraphAsDotFile(this.g, getGraphicGraph(fsi), outputFilePath);
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.exit(1);
+                    if (display) {
+                        pipe.pump();
+                    }
+                }    
+                dgs.end();
+                fsi.end();
+            } catch (IOException e1) {
+                e1.printStackTrace();
+                System.exit(1);
+            }
+        } else { // DotFile
+            try {
+                dgs.begin(inputDGS);
+                while (dgs.nextEvents()) {              
+                    layout.compute();
+                } 
+                fsi.begin(outputDirectory); // Get last layout to propagate to fsi without generating any image file
+                fsi.end();              
+                dgs.end();              
+            } catch (IOException e1) {
+                e1.printStackTrace();
+                System.exit(1);
+            }       
+            
+            try {
+                String outputFilePath = inputDGS.split("\\.(?=[^\\.]+$)")[0]+".dot"; // replace ".dhs" by ".dot"
+                exportGraphAsDotFile(this.g, getGraphicGraph(fsi), outputFilePath);
+            } catch (Exception e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
         }
     }
     
@@ -224,6 +244,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             System.out.println("-dgs <arg>      input GraphStream DGS file");
             System.out.println("-out <arg>      frame filenames are prepended with this path");
             System.out.println("-layout <arg>   layout type to use. options: [springbox|linlog]. default: springbox");
+            System.out.println("-mode <arg>     mode. options: [images|dot]. default: images");
             System.out.println("-seed <arg>     random seed for the layout");
             System.out.println("-display screen layout option to use. options: [screen]");
             System.out.println("-h,-help        display this help and exit");
@@ -233,6 +254,10 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         LayoutType layout_type = LayoutType.SpringBox;      
         if (params.containsKey("layout") && params.get("layout").get(0).equals("linlog")) {
             layout_type = LayoutType.LinLog;
+        }
+        Mode mode = Mode.Images;      
+        if (params.containsKey("mode") && params.get("mode").get(0).equals("dot")) {
+            mode = Mode.DotFile;
         }
         Boolean display = false;
         if (params.containsKey("display") && params.get("display").get(0).equals("screen")) {
@@ -246,7 +271,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         try {
             System.out.println(params.get("dgs").get(0));
             DgsGraphStreamAnimate a = new DgsGraphStreamAnimate();
-            a.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, seed, display);
+            a.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, seed, display);
         } catch(IOException e) {
             e.printStackTrace();
         }

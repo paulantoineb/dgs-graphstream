@@ -12,6 +12,7 @@ import itertools
 import subprocess
 import random
 import networkx as nx
+from collections import defaultdict
 
 DGSGS_JAR = 'dgs-graphstream/dist/dgs-graphstream.jar'
 
@@ -188,38 +189,90 @@ def create_or_clean_output_dir(directory):
     if os.path.exists(directory):
         shutil.rmtree(directory) # delete folder if it exists
     os.makedirs(directory) # create folder
-
-def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour_map):
+    
+def read_graph_from_file(network, format):
     if format == 'metis':
-        G = read_metis(network)
+        graph = read_metis(network)
+    elif format == 'dot':
+        graph = read_dot(network)
+    else:
+        graph = read_pajek(network)
+    return graph
+    
+def get_colour_attribute(format):
+    if format == 'metis':
         colour_attr = "" # use colour_map
     elif format == 'dot':
-        G = read_dot(network)
         colour_attr = "fillcolor"
     else:
-        G = read_pajek(network)
         colour_attr = "box"
-        
+    return colour_attr
+
+def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour_map):
+    graph = read_graph_from_file(network, format)
+    colour_attr = get_colour_attribute(format)
     assignments = read_assignments(assignments_f)
-    create_or_clean_output_dir(output)
     
     if partitions_num == 1:
-        write_dgs(output, 0, G, colour_map, colour_attr) # ignore assignments file if single partition (TEMPORARY)
+        write_dgs(output, 0, graph, colour_map, colour_attr) # ignore assignments file if single partition (TEMPORARY)
     else:
         for p in range(0, partitions_num):
             nodes = [i for i,x in enumerate(assignments) if x == p]
-            Gsub = G.subgraph(nodes)
+            Gsub = graph.subgraph(nodes)
             write_dgs(output, p, Gsub, colour_map, colour_attr)
 
-def gen_frames(output, partitions_num, layout, seed):
-
+def gen_frames(output, partitions_num, layout, seed, mode):
     for p in range(0, partitions_num):
         dgs = os.path.join(output, 'partition_{}.dgs'.format(p))
         out = os.path.join(output, 'frames_partition/p{}_'.format(p))
-        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed)]
+        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed), '-mode', mode]
         retval = subprocess.call(
             args, cwd='.',
             stderr=subprocess.STDOUT)
+            
+def compute_layout_and_export_dot_file(args):
+    gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, None) # generate dgs file from input file
+    gen_frames(args.output, args.num_partitions, args.layout, args.seed, 'dot') # compute layout from dgs file and write dot file
+    add_clusters_to_dot_file(args)
+    
+def read_oslom2_tp_file(filepath):
+    node_dict = defaultdict(list) # initialize modules per node dictionary
+    with open(filepath, 'r') as file:
+        line = next(file)
+        while line:
+            if line.startswith('#'): # module header line
+                module = line.split()[1] # module id
+            else: # nodes in the module
+                nodes = line.split()
+                for node in nodes:
+                    node_dict[node].append(module) # add current module to node dictionary
+                    
+            line = next(file, None)
+            
+    return node_dict
+    
+def add_clusters_to_dot_file(args):
+    partition = 0 # TEMPORARY
+    input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition)) 
+    clusters_per_node = read_oslom2_tp_file(args.tp) # get cluster(s) for each node
+    graph = read_dot(input_dot_filename) # read dot file
+    first_cluster_per_node = {k:v[0] for k,v in clusters_per_node.items()}
+    nx.set_node_attributes(graph, 'cluster', first_cluster_per_node)
+    #print(graph.nodes(data=True))
+    nx.nx_agraph.write_dot(graph, input_dot_filename) # write dot file
+
+def color_nodes_with_gvmap(args):
+    partition = 0 # TEMPORARY
+    input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition)) 
+    output_dot_filename = os.path.join(args.output, 'partition_{}_out.dot'.format(partition)) 
+    args = ['gvmap', '-e', '-w', input_dot_filename]
+    output_file = open(output_dot_filename, "w")
+    retval = subprocess.call(
+            args, cwd='.',
+            stderr=subprocess.STDOUT,
+            stdout=output_file)
+    output_file.close()
+    return output_dot_filename
 
 def join_images(output, assignments_f, partitions_num):
     frames = {}
@@ -303,6 +356,8 @@ if __name__ == '__main__':
                         help='Partition assignments list')
     parser.add_argument('output',
                         help='Output directory')
+    parser.add_argument('--tp',
+                        help='OSLOM2 tp file')
     parser.add_argument('--format', choices=['metis', 'dot', 'pajek'], default='metis', help='Format of the input network')
     parser.add_argument('--num-partitions', '-n', type=int, default=4, metavar='N',
                         help='Number of partitions')
@@ -322,9 +377,17 @@ if __name__ == '__main__':
     all_args = False
     if not args.dgs and not args.frames and not args.join:
         all_args = True
+        
+    create_or_clean_output_dir(args.output)
+        
+    if args.format != "metis": # compute layout with Graphstream and color nodes with gvmap
+        compute_layout_and_export_dot_file(args)
+        output_dot_filename = color_nodes_with_gvmap(args)
+        args.network = output_dot_filename
+        args.format = "dot"
 
     if args.dgs or all_args:
-        if args.format is "metis":
+        if args.format == "metis":
             print("Generating colour map...")
             colour_map = gen_colour_map(args.num_partitions)
         else:
@@ -336,7 +399,7 @@ if __name__ == '__main__':
 
     if args.frames or all_args:
         print("Using GraphStream to generate frames...")
-        gen_frames(args.output, args.num_partitions, args.layout, args.seed)
+        gen_frames(args.output, args.num_partitions, args.layout, args.seed, 'images')
         print("Done.")
 
     if args.join or all_args:
