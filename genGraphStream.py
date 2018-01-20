@@ -244,23 +244,47 @@ def read_oslom2_tp_file(filepath):
         line = next(file)
         while line:
             if line.startswith('#'): # module header line
-                module = line.split()[1] # module id
+                module_id = int(line.split()[1]) + 1 # 1-based (needed by gvmap) module id
             else: # nodes in the module
                 nodes = line.split()
-                for node in nodes:
-                    node_dict[node].append(module) # add current module to node dictionary
+                for node_id in nodes:
+                    node_dict[node_id].append(module_id) # add current module to node dictionary
                     
             line = next(file, None)
-            
-    return node_dict
+    
+    first_cluster_per_node = {k:v[0] for k,v in node_dict.items()}  
+    return first_cluster_per_node   
+    
+def read_infomap_tree_file(filepath, level):
+    node_dict = {} # initialize modules per node dictionary
+    module_ids = []
+    with open(filepath, 'r') as file:
+        line = next(file)
+        while line:
+            if not line.startswith('#'):
+                values = line.split()
+                module_id = ''.join(values[0].split(":")[0:level]) # concatenated module id at given level (1 to 3). 2:4:3 becomes 2 at level 1, 24 at level 2 and 243 at level 3
+                if not module_id in module_ids:
+                    module_ids.append(module_id)
+                node_id = values[2].replace('"','') # node id without quotes
+                node_dict[node_id] = module_ids.index(module_id) + 1 # add current 1-based (needed by gvmap) module id to node dictionary (
+                    
+            line = next(file, None)
+    
+    return node_dict    
     
 def add_clusters_to_dot_file(args):
     partition = 0 # TEMPORARY
     input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition)) 
-    clusters_per_node = read_oslom2_tp_file(args.tp) # get cluster(s) for each node
-    graph = read_dot(input_dot_filename) # read dot file
-    first_cluster_per_node = {k:v[0] for k,v in clusters_per_node.items()}
-    nx.set_node_attributes(graph, 'cluster', first_cluster_per_node)
+    cluster_per_node = None
+    if args.tp:
+        cluster_per_node = read_oslom2_tp_file(args.tp) # get cluster(s) from OSLOM2 tp file
+    elif args.tree:
+        level = 1
+        cluster_per_node = read_infomap_tree_file(args.tree, level) # get cluster(s) from Infomap .tree file
+    graph = read_dot(input_dot_filename) # read dot file   
+    if cluster_per_node:
+        nx.set_node_attributes(graph, 'cluster', cluster_per_node)
     #print(graph.nodes(data=True))
     nx.nx_agraph.write_dot(graph, input_dot_filename) # write dot file
 
@@ -361,6 +385,8 @@ if __name__ == '__main__':
                         help='Output directory')
     parser.add_argument('--tp',
                         help='OSLOM2 tp file')
+    parser.add_argument('--tree',
+                        help='Infomap .tree file')
     parser.add_argument('--format', choices=['metis', 'dot', 'pajek'], default='metis', help='Format of the input network')
     parser.add_argument('--num-partitions', '-n', type=int, default=4, metavar='N',
                         help='Number of partitions')
