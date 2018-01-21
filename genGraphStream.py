@@ -4,6 +4,7 @@ import os
 import gzip
 import glob
 import shutil
+import re
 import tempfile
 from colour import Color
 import colorsys
@@ -12,6 +13,7 @@ import itertools
 import subprocess
 import random
 import networkx as nx
+import pydot
 from collections import defaultdict
 
 DGSGS_JAR = 'dgs-graphstream/dist/dgs-graphstream.jar'
@@ -108,7 +110,8 @@ def remove_string_from_file(file, string):
         
 def read_pajek(network):
     remove_string_from_file(network, "ic ") # remove "ic" attribute from pajek file so that nx.read_pajek reads the node color (it only reads the first 7 attributes and the color is the 8th)
-    return nx.read_pajek(network)
+    graph = nx.read_pajek(network)
+    return relabel_graph(graph)
 
 def read_assignments(assignments):
     with open(assignments, 'r') as f:
@@ -152,11 +155,14 @@ def gen_colour_map(partitions_num):
             colour_map[node] = colours[i]
 
     return colour_map
+    
+def format_id(id):
+    return re.sub('[^0-9a-zA-Z]+', '_', id) # replace all non-alphanumeric characters by underscore
 
 def write_dgs(output, partition, graph, colour_map, colour_attr):
 
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
-
+    
     with open(filename, 'w') as outf:
         outf.write("DGS004\n")
         outf.write("partition_{} 0 0\n".format(partition))
@@ -166,23 +172,26 @@ def write_dgs(output, partition, graph, colour_map, colour_attr):
         nodes_added = []
         edges_added = []
         for n in graph.nodes_iter(data=True):
+            node_id = format_id(n[0])
             if colour_map:
                 colour = 'black'
-                if n[0] in colour_map:
-                    colour = colour_map[n[0]]
+                if node_id in colour_map:
+                    colour = colour_map[node_id]
             else:
                 if colour_attr in n[1]:
                     colour = n[1][colour_attr] # get color from attributes
                 else:
                     colour = 'black'
 
-            outf.write("an {} c='{}'\n".format(n[0], colour))
-            nodes_added += [n[0]]
+            outf.write("an {} c='{}'\n".format(node_id, colour))
+            nodes_added += [node_id]
 
             for e in graph.edges_iter(data=True):
-                if e[0] in nodes_added and e[1] in nodes_added and (e[0], e[1]) not in edges_added:
-                    outf.write("ae {} {} {}\n".format(i, e[0], e[1]))
-                    edges_added += [(e[0], e[1])]
+                edge1_id = format_id(e[0])
+                edge2_id = format_id(e[1])
+                if edge1_id in nodes_added and edge2_id in nodes_added and (edge1_id, edge2_id) not in edges_added:
+                    outf.write("ae {} {} {}\n".format(i, edge1_id, edge2_id))
+                    edges_added += [(edge1_id, edge2_id)]
                     i += 1
 
             outf.write("st {}\n".format(st))
@@ -193,13 +202,19 @@ def create_or_clean_output_dir(directory):
         shutil.rmtree(directory) # delete folder if it exists
     os.makedirs(directory) # create folder
     
+def relabel_graph(graph):
+    # relabel nodes with id instead of label
+    mapping = {n[0]:n[1]['id'] for n in graph.nodes_iter(data=True)}
+    return nx.relabel_nodes(graph, mapping)
+    
 def read_graph_from_file(network, format):
     if format == 'metis':
         graph = read_metis(network)
     elif format == 'dot':
         graph = read_dot(network)
     else:
-        graph = read_pajek(network)
+        graph = read_pajek(network) 
+          
     return graph
     
 def get_colour_attribute(format):
@@ -271,35 +286,71 @@ def read_infomap_tree_file(filepath, level):
                     
             line = next(file, None)
     
-    return node_dict    
+    return node_dict   
+
+def prune_invalid_keys_from_dictionary(valid_keys, dictionary):   
+    to_be_removed = []
+    for key, value in dictionary.items():
+        if not key in valid_keys:
+            to_be_removed.append(key)
+    for key in to_be_removed:
+        del dictionary[key]
+        
+def add_node_attribute_to_dot_file(filepath, attribute_name, dictionary):
+    # use pydot instead of networkx to edit dot file since networkx "nx.nx_agraph.write_dot" method messed up the formatting and order of dot file
+    graph = pydot.graph_from_dot_file(filepath)[0]
+    for node in graph.get_nodes():
+        name = node.get_name().replace('"', '')
+        if name in dictionary:
+            value = dictionary[name]
+            node.set(attribute_name, value)
+    graph.write(filepath)
+	
+def get_node_attribute_from_dot_file(filepath, attribute_name):
+    dictionary = {}
+    output_graph = pydot.graph_from_dot_file(filepath)[0]
+    for node in output_graph.get_nodes():
+        name = node.get_name().replace('"', '')
+        if name != 'graph':
+            dictionary[name] = node.get(attribute_name)
+    return dictionary
     
-def add_clusters_to_dot_file(args):
+def add_clusters_to_dot_file(args):    
     partition = 0 # TEMPORARY
-    input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition)) 
+    input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition))   
+    
     cluster_per_node = None
     if args.tp:
         cluster_per_node = read_oslom2_tp_file(args.tp) # get cluster(s) from OSLOM2 tp file
     elif args.tree:
         level = 1
         cluster_per_node = read_infomap_tree_file(args.tree, level) # get cluster(s) from Infomap .tree file
-    graph = read_dot(input_dot_filename) # read dot file   
-    if cluster_per_node:
-        nx.set_node_attributes(graph, 'cluster', cluster_per_node)
-    #print(graph.nodes(data=True))
-    nx.nx_agraph.write_dot(graph, input_dot_filename) # write dot file
+    
+    # remove non-existent nodes from cluster_per_node dictionary
+    graph = read_dot(input_dot_filename)
+    node_ids = [n[0] for n in graph.nodes_iter(data=True)]
+    prune_invalid_keys_from_dictionary(node_ids, cluster_per_node)
+    
+    # add cluster attribute to dot file
+    add_node_attribute_to_dot_file(input_dot_filename, 'cluster', cluster_per_node)
 
 def color_nodes_with_gvmap(args):
     partition = 0 # TEMPORARY
     input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition)) 
     output_dot_filename = os.path.join(args.output, 'partition_{}_out.dot'.format(partition)) 
-    args = ['gvmap', '-e', '-w', input_dot_filename]
+    args = ['gvmap', '-e', '-w', '-d', str(args.seed), input_dot_filename] # "-w option is only available with this graphviz fork https://gitlab.com/paulantoineb/graphviz
     output_file = open(output_dot_filename, "w")
     retval = subprocess.call(
             args, cwd='.',
             stderr=subprocess.STDOUT,
             stdout=output_file)
     output_file.close()
-    return output_dot_filename
+    
+    # extract node color from gvmap's output and add it to the input graph (gvmap reorders nodes and edges which affects dgs)
+    color_per_node = get_node_attribute_from_dot_file(output_dot_filename, 'fillcolor')
+    add_node_attribute_to_dot_file(input_dot_filename, 'fillcolor', color_per_node)
+
+    return input_dot_filename
 
 def join_images(output, assignments_f, partitions_num):
     frames = {}
