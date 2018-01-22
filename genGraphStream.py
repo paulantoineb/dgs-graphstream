@@ -245,8 +245,9 @@ def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour
 def gen_frames(output, partitions_num, layout, seed, mode):
     for p in range(0, partitions_num):
         dgs = os.path.join(output, 'partition_{}.dgs'.format(p))
+        output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
         out = os.path.join(output, 'frames_partition/p{}_'.format(p))
-        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed), '-mode', mode]
+        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed), '-mode', mode, '-dotfile', output_dot_filepath]
         retval = subprocess.call(
             args, cwd='.',
             stderr=subprocess.STDOUT)

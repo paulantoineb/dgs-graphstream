@@ -50,7 +50,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         DotFile
     }
         
-    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, long seed, Boolean display)
+    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath, long seed, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
@@ -119,8 +119,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             }       
             
             try {
-                String outputFilePath = inputDGS.split("\\.(?=[^\\.]+$)")[0]+".dot"; // replace ".dhs" by ".dot"
-                exportGraphAsDotFile(this.g, getGraphicGraph(fsi), outputFilePath);
+                exportGraphAsDotFile(this.g, getGraphicGraph(fsi), outputDotFilepath);
             } catch (Exception e) {
                 e.printStackTrace();
                 System.exit(1);
@@ -259,6 +258,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             System.out.println("-out <arg>      frame filenames are prepended with this path");
             System.out.println("-layout <arg>   layout type to use. options: [springbox|linlog]. default: springbox");
             System.out.println("-mode <arg>     mode. options: [images|dot]. default: images");
+			System.out.println("-dotfile <arg>  output dot file");
             System.out.println("-seed <arg>     random seed for the layout");
             System.out.println("-display screen layout option to use. options: [screen]");
             System.out.println("-h,-help        display this help and exit");
@@ -285,7 +285,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         try {
             System.out.println(params.get("dgs").get(0));
             DgsGraphStreamAnimate a = new DgsGraphStreamAnimate();
-            a.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, seed, display);
+            a.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0), seed, display);
         } catch(IOException e) {
             e.printStackTrace();
         }
