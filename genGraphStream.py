@@ -242,19 +242,19 @@ def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour
             Gsub = graph.subgraph(nodes)
             write_dgs(output, p, Gsub, colour_map, colour_attr)
 
-def gen_frames(output, partitions_num, layout, seed, mode):
+def gen_frames(output, partitions_num, layout, seed, force, a, r, mode):
     for p in range(0, partitions_num):
         dgs = os.path.join(output, 'partition_{}.dgs'.format(p))
         output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
         out = os.path.join(output, 'frames_partition/p{}_'.format(p))
-        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed), '-mode', mode, '-dotfile', output_dot_filepath]
+        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed), '-force', str(force), '-a', str(a), '-r', str(r), '-mode', mode, '-dotfile', output_dot_filepath]
         retval = subprocess.call(
             args, cwd='.',
             stderr=subprocess.STDOUT)
             
 def compute_layout_and_export_dot_file(args):
     gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, None, args.tree != None) # generate dgs file from input file
-    gen_frames(args.output, args.num_partitions, args.layout, args.seed, 'dot') # compute layout from dgs file and write dot file
+    gen_frames(args.output, args.num_partitions, args.layout, args.seed, args.force, args.a, args.r, 'dot') # compute layout from dgs file and write dot file
     clusters_per_node = add_clusters_to_dot_file(args)
     return clusters_per_node
     
@@ -473,6 +473,12 @@ if __name__ == '__main__':
                         help='Graph layout')
     parser.add_argument('--seed', '-s', type=int, default=random.randint(1, 10**6), metavar='S',
                         help='Seed for graph layout')
+    parser.add_argument('--force', '-f', type=float, default=3.0, metavar='F',
+                        help='Force for linlog graph layout')
+    parser.add_argument('-a', type=float, default=0, metavar='A',
+                        help='Attraction factor for linlog graph layout')
+    parser.add_argument('-r', type=float, default=-1.2, metavar='R',
+                        help='Repulsion factor for linlog graph layout')
     parser.add_argument('--dgs', action='store_true', default=False,
                         help='Generate GraphStream DGS file')
     parser.add_argument('--frames', action='store_true', default=False,
@@ -508,7 +514,7 @@ if __name__ == '__main__':
 
     if args.frames or all_args:
         print("Using GraphStream to generate frames...")
-        gen_frames(args.output, args.num_partitions, args.layout, args.seed, 'images')
+        gen_frames(args.output, args.num_partitions, args.layout, args.seed, args.force, args.a, args.r, 'images')
         print("Done.")
 
     if args.join or all_args:

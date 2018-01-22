@@ -50,7 +50,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         DotFile
     }
         
-    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath, long seed, Boolean display)
+    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath, long seed, float force, float a, float r, float theta, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
@@ -60,7 +60,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         this.g = new DefaultGraph("graph");
         this.g.addAttribute("ui.stylesheet", "url('style.css')");
         
-        layout = CreateLayout(layout_type, seed);
+        layout = CreateLayout(layout_type, seed, force, a, r, theta);
         
         fsi = new FileSinkImages(OutputType.PNG, Resolutions.HD720);
         fsi.setOutputPolicy(OutputPolicy.BY_STEP);
@@ -130,16 +130,13 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     /**
      * Create graph layout
      */
-    private BarnesHutLayout CreateLayout(LayoutType layout_type, long seed) {
+    private BarnesHutLayout CreateLayout(LayoutType layout_type, long seed, float force, float a, float r, float theta) {
         if (layout_type == LayoutType.LinLog) {
             LinLog layout = new LinLog(false, new Random(seed));
-            double a = 0;
-            double r = -1.9;
-            double force = 3;
 
             layout.configure(a, r, true, force);
             layout.setQuality(1);
-            layout.setBarnesHutTheta(0.5);
+            layout.setBarnesHutTheta(theta);
             //layout.setStabilizationLimit(0);
             
             return layout;
@@ -225,7 +222,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         List<String> options = null;
 
         for (String a : args) {
-            if (a.charAt(0) == '-') {
+            if (a.charAt(0) == '-' && Character.isLetter(a.charAt(1))) {
                 if (a.length() < 2) {
                     System.err.println("Error at argument " + a);
                     return;
@@ -257,9 +254,13 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             System.out.println("-dgs <arg>      input GraphStream DGS file");
             System.out.println("-out <arg>      frame filenames are prepended with this path");
             System.out.println("-layout <arg>   layout type to use. options: [springbox|linlog]. default: springbox");
-            System.out.println("-mode <arg>     mode. options: [images|dot]. default: images");
-			System.out.println("-dotfile <arg>  output dot file");
             System.out.println("-seed <arg>     random seed for the layout");
+            System.out.println("-force <arg>    force for LinLog layout");
+			System.out.println("-a <arg>        attraction factor for LinLog layout");
+			System.out.println("-r <arg>        repulsion factor for LinLog layout");
+            System.out.println("-theta <arg>    theta for LinLog layout");
+            System.out.println("-mode <arg>     mode. options: [images|dot]. default: images");
+            System.out.println("-dotfile <arg>  output dot file");          
             System.out.println("-display screen layout option to use. options: [screen]");
             System.out.println("-h,-help        display this help and exit");
             System.exit(1);
@@ -281,11 +282,28 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (params.containsKey("seed")) {
             seed = Long.parseLong(params.get("seed").get(0));
         }
+        float force = 3.0f; // default force value for LinLog layout
+        if (params.containsKey("force")) {
+            force = Float.parseFloat(params.get("force").get(0));
+        }
+		float a = 0f; // default attraction value for LinLog layout
+        if (params.containsKey("a")) {
+            a = Float.parseFloat(params.get("a").get(0));
+        }
+		float r = -1.2f; // default repulsion value for LinLog layout
+        if (params.containsKey("r")) {
+            r = Float.parseFloat(params.get("r").get(0));
+        }
+        float theta = 0.7f; // default theta value for LinLog layout
+        if (params.containsKey("theta")) {
+            theta = Float.parseFloat(params.get("theta").get(0));
+        }
         
         try {
             System.out.println(params.get("dgs").get(0));
-            DgsGraphStreamAnimate a = new DgsGraphStreamAnimate();
-            a.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0), seed, display);
+            DgsGraphStreamAnimate dgs = new DgsGraphStreamAnimate();
+            
+            dgs.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0), seed, force, a, r, theta, display);
         } catch(IOException e) {
             e.printStackTrace();
         }
