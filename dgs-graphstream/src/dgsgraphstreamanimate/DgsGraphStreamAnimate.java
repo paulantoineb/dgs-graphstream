@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Random;
 import java.lang.reflect.Field;
 import org.graphstream.graph.Node;
+import org.graphstream.graph.Edge;
 import org.graphstream.graph.implementations.DefaultGraph;
 import org.graphstream.stream.ProxyPipe;
 import org.graphstream.stream.file.FileSourceDGS;
@@ -74,7 +75,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         layout.addAttributeSink(this.g);
         layout.addSink(fsi);
 
-        dgs.addAttributeSink(this);
+        dgs.addSink(this);
 
         Viewer viewer = null;
         
@@ -197,6 +198,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
 
         if (attribute.equals("c")) {
             Node n = this.g.getNode(nodeId);
+            
 
             int count = newValue.toString().length() - newValue.toString().replace(",", "").length() + 1;
             float share = 1.0f / (float)count;
@@ -205,6 +207,16 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
 
             n.setAttribute("ui.style", "shape: pie-chart; fill-color: " + newValue.toString() + ";");
             n.setAttribute("ui.pie-values", pie_values);
+        }
+    }
+    
+    public void edgeAdded(String sourceId, long timeId, String edgeId,
+            String fromNodeId, String toNodeId, boolean directed) {
+        Edge e = this.g.getEdge(edgeId);
+        Node source_node = this.g.getNode(fromNodeId);
+        String style_attr = source_node.getAttribute("ui.style");
+        if (style_attr != null) {
+            e.setAttribute("ui.style", style_attr.split(";")[1] + ";");
         }
     }
     
