@@ -111,7 +111,7 @@ def remove_string_from_file(file, string):
 def read_pajek(network):
     remove_string_from_file(network, "ic ") # remove "ic" attribute from pajek file so that nx.read_pajek reads the node color (it only reads the first 7 attributes and the color is the 8th)
     graph = nx.read_pajek(network)
-    return relabel_graph(graph)
+    return graph
 
 def read_assignments(assignments):
     with open(assignments, 'r') as f:
@@ -179,7 +179,7 @@ def write_dgs(output, partition, graph, colour_map, colour_attr):
                     colour = colour_map[node_id]
             else:
                 if colour_attr in n[1]:
-                    colour = n[1][colour_attr] # get color from attributes
+                    colour = n[1][colour_attr] # get color(s) from attributes
                 else:
                     colour = 'black'
 
@@ -207,13 +207,16 @@ def relabel_graph(graph):
     mapping = {n[0]:n[1]['id'] for n in graph.nodes_iter(data=True)}
     return nx.relabel_nodes(graph, mapping)
     
-def read_graph_from_file(network, format):
+def read_graph_from_file(network, format, using_infomap):
+    graph = None
     if format == 'metis':
         graph = read_metis(network)
     elif format == 'dot':
         graph = read_dot(network)
-    else:
+    elif format == 'pajek':
         graph = read_pajek(network) 
+        if using_infomap:   
+            graph = relabel_graph(graph) # relabel graph with id for infomap as infomap's .tree file use the id to refer to the nodes while OSLOM2 tp file use the label
           
     return graph
     
@@ -226,8 +229,8 @@ def get_colour_attribute(format):
         colour_attr = "box"
     return colour_attr
 
-def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour_map):
-    graph = read_graph_from_file(network, format)
+def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour_map, using_infomap):
+    graph = read_graph_from_file(network, format, using_infomap)
     colour_attr = get_colour_attribute(format)
     assignments = read_assignments(assignments_f)
     
@@ -249,9 +252,10 @@ def gen_frames(output, partitions_num, layout, seed, mode):
             stderr=subprocess.STDOUT)
             
 def compute_layout_and_export_dot_file(args):
-    gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, None) # generate dgs file from input file
+    gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, None, args.tree != None) # generate dgs file from input file
     gen_frames(args.output, args.num_partitions, args.layout, args.seed, 'dot') # compute layout from dgs file and write dot file
-    add_clusters_to_dot_file(args)
+    clusters_per_node = add_clusters_to_dot_file(args)
+    return clusters_per_node
     
 def read_oslom2_tp_file(filepath):
     node_dict = defaultdict(list) # initialize modules per node dictionary
@@ -267,11 +271,10 @@ def read_oslom2_tp_file(filepath):
                     
             line = next(file, None)
     
-    first_cluster_per_node = {k:v[0] for k,v in node_dict.items()}  
-    return first_cluster_per_node   
+    return node_dict   
     
 def read_infomap_tree_file(filepath, level):
-    node_dict = {} # initialize modules per node dictionary
+    node_dict = defaultdict(list) # initialize modules per node dictionary
     module_ids = []
     with open(filepath, 'r') as file:
         line = next(file)
@@ -281,8 +284,8 @@ def read_infomap_tree_file(filepath, level):
                 module_id = ''.join(values[0].split(":")[0:level]) # concatenated module id at given level (1 to 3). 2:4:3 becomes 2 at level 1, 24 at level 2 and 243 at level 3
                 if not module_id in module_ids:
                     module_ids.append(module_id)
-                node_id = values[2].replace('"','') # node id without quotes
-                node_dict[node_id] = module_ids.index(module_id) + 1 # add current 1-based (needed by gvmap) module id to node dictionary (
+                node_id = values[2].strip('"') # node id without quotes
+                node_dict[node_id].append(module_ids.index(module_id) + 1) # add current 1-based (needed by gvmap) module id to node dictionary
                     
             line = next(file, None)
     
@@ -305,12 +308,12 @@ def add_node_attribute_to_dot_file(filepath, attribute_name, dictionary):
             value = dictionary[name]
             node.set(attribute_name, value)
     graph.write(filepath)
-	
+    
 def get_node_attribute_from_dot_file(filepath, attribute_name):
     dictionary = {}
     output_graph = pydot.graph_from_dot_file(filepath)[0]
     for node in output_graph.get_nodes():
-        name = node.get_name().replace('"', '')
+        name = node.get_name().strip('"')
         if name != 'graph':
             dictionary[name] = node.get(attribute_name)
     return dictionary
@@ -319,22 +322,25 @@ def add_clusters_to_dot_file(args):
     partition = 0 # TEMPORARY
     input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition))   
     
-    cluster_per_node = None
+    clusters_per_node = None
     if args.tp:
-        cluster_per_node = read_oslom2_tp_file(args.tp) # get cluster(s) from OSLOM2 tp file
+        clusters_per_node = read_oslom2_tp_file(args.tp) # get cluster(s) from OSLOM2 tp file
     elif args.tree:
         level = 1
-        cluster_per_node = read_infomap_tree_file(args.tree, level) # get cluster(s) from Infomap .tree file
+        clusters_per_node = read_infomap_tree_file(args.tree, level) # get cluster(s) from Infomap .tree file
     
-    # remove non-existent nodes from cluster_per_node dictionary
+    # remove non-existent nodes from clusters_per_node dictionary
     graph = read_dot(input_dot_filename)
     node_ids = [n[0] for n in graph.nodes_iter(data=True)]
-    prune_invalid_keys_from_dictionary(node_ids, cluster_per_node)
+    prune_invalid_keys_from_dictionary(node_ids, clusters_per_node)
     
     # add cluster attribute to dot file
-    add_node_attribute_to_dot_file(input_dot_filename, 'cluster', cluster_per_node)
+    first_cluster_per_node = {k:v[0] for k,v in clusters_per_node.items()} # gvmap only supports a single cluster per node
+    add_node_attribute_to_dot_file(input_dot_filename, 'cluster', first_cluster_per_node)
+    
+    return clusters_per_node
 
-def color_nodes_with_gvmap(args):
+def color_nodes_with_gvmap(args, clusters_per_node, using_infomap):
     partition = 0 # TEMPORARY
     input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition)) 
     output_dot_filename = os.path.join(args.output, 'partition_{}_out.dot'.format(partition)) 
@@ -346,11 +352,32 @@ def color_nodes_with_gvmap(args):
             stdout=output_file)
     output_file.close()
     
-    # extract node color from gvmap's output and add it to the input graph (gvmap reorders nodes and edges which affects dgs)
-    color_per_node = get_node_attribute_from_dot_file(output_dot_filename, 'fillcolor')
-    add_node_attribute_to_dot_file(input_dot_filename, 'fillcolor', color_per_node)
+    ### extract node color from gvmap's output and add it to the input graph (gvmap reorders nodes and edges which affects dgs)
+    color_per_node = get_node_attribute_from_dot_file(output_dot_filename, 'fillcolor') 
+    colors_per_node = get_colors_per_node(color_per_node, clusters_per_node) # combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node  
+    add_node_attribute_to_dot_file(input_dot_filename, 'fillcolor', color_per_node if using_infomap else colors_per_node)
 
     return input_dot_filename
+
+''' 
+Combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node
+'''
+def get_colors_per_node(color_per_node, clusters_per_node):
+    # get cluster to color mapping
+    cluster_to_color = {}
+    for node, clusters in clusters_per_node.items():
+        first_cluster = clusters[0] # consider only the first cluster as it was the one passed to gvmap for coloring
+        if not first_cluster in cluster_to_color:
+            if node in color_per_node:                  
+                color = color_per_node[node]
+                cluster_to_color[first_cluster] = color
+                
+    # get colors per node
+    colors_per_node = {}
+    for node, clusters in clusters_per_node.items():
+        colors = [cluster_to_color[cluster] for cluster in clusters]
+        colors_per_node[node] = ','.join([c.strip('"') for c in colors])
+    return colors_per_node
 
 def join_images(output, assignments_f, partitions_num):
     frames = {}
@@ -459,10 +486,11 @@ if __name__ == '__main__':
         all_args = True
         
     create_or_clean_output_dir(args.output)
+    using_infomap = args.tree != None
         
     if args.format != "metis": # compute layout with Graphstream and color nodes with gvmap
-        compute_layout_and_export_dot_file(args)
-        output_dot_filename = color_nodes_with_gvmap(args)
+        clusters_per_node = compute_layout_and_export_dot_file(args)
+        output_dot_filename = color_nodes_with_gvmap(args, clusters_per_node, using_infomap)   
         args.network = output_dot_filename
         args.format = "dot"
 
@@ -474,7 +502,7 @@ if __name__ == '__main__':
             print("Using colours from input file")
             colour_map = None
         print("Generating GraphStream DGS files...")
-        gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, colour_map)
+        gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, colour_map, using_infomap)
         print("Done")
 
     if args.frames or all_args:
