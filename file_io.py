@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+
+import os
+import logging
+import networkx as nx
+from collections import defaultdict
+
+import utils
+
+def read_metis(file):
+    logging.info("Reading METIS file %s", file)
+    
+    G = nx.Graph()
+
+    # add node weights from METIS file
+    with open(file, "r") as metis:
+
+        n = 0
+        first_line = None
+        has_edge_weights = False
+        has_node_weights = False
+        for i, line in enumerate(metis):
+            if line[0] == '%':
+                # ignore comments
+                continue
+
+            if not first_line:
+                # read meta data from first line
+                first_line = line.split()
+                m_nodes = int(first_line[0])
+                m_edges = int(first_line[1])
+                if len(first_line) > 2:
+                    # FMT has the following meanings:
+                    #  0  the graph has no weights (in this case, you can omit FMT)
+                    #  1  the graph has edge weights
+                    # 10  the graph has node weights
+                    # 11  the graph has both edge and node weights
+                    file_format = first_line[2]
+                    if int(file_format) == 0:
+                        pass
+                    elif int(file_format) == 1:
+                        has_edge_weights = True
+                    elif int(file_format) == 10:
+                        has_node_weights = True
+                    elif int(file_format) == 11:
+                        has_edge_weights = True
+                        has_node_weights = True
+                    else:
+                        assert False, "File format not supported"
+                continue
+
+            # METIS starts node count from 1, here we start from 0 by
+            # subtracting 1 in the edge list and incrementing 'n' after
+            # processing the line.
+            if line.strip():
+                e = line.split()
+                if has_edge_weights and has_node_weights:
+                    if len(e) > 2:
+                        # create weighted edge list:
+                        #  [(1, 2, {'weight':'2'}), (1, 3, {'weight':'8'})]
+                        edges_split = list(zip(*[iter(e[1:])] * 2))
+                        edge_list = [(n, int(v[0]) - 1, {'weight': int(v[1])}) for v in edges_split]
+
+                        G.add_edges_from(edge_list)
+                        G.node[n]['weight'] = int(e[0])
+                    else:
+                        # no edges
+                        G.add_nodes_from([n], weight=int(e[0]))
+
+                elif has_edge_weights and not has_node_weights:
+                    pass
+                elif not has_edge_weights and has_node_weights:
+                    pass
+                else:
+                    edge_list = [(n, int(v) - 1, {'weight':1.0}) for v in e]
+                    G.add_edges_from(edge_list)
+                    G.node[n]['weight'] = 1.0
+            else:
+                # blank line indicates no node weight
+                G.add_nodes_from([n], weight=1.0)
+            n += 1
+
+    # sanity check
+    assert (m_nodes == G.number_of_nodes()), "Expected {} nodes, networkx graph contains {} nodes".format(m_nodes, G.number_of_nodes())
+    assert (m_edges == G.number_of_edges()), "Expected {} edges, networkx graph contains {} edges".format(m_edges, G.number_of_edges())
+
+    return G
+    
+def read_dot(file):
+    logging.info("Reading Graphviz dot file %s", file)
+    return nx.nx_agraph.read_dot(file)
+    
+def read_graph_from_file(file, format):
+    graph = None
+    if format == 'metis':
+        graph = read_metis(file)
+    elif format == 'dot':
+        graph = read_dot(file)        
+    return graph
+
+def read_assignments_file(file):
+    logging.info("Reading assignments file %s", file)
+    with open(file, 'r') as f:
+        return [int(l.strip()) for l in f.readlines()]     
+
+def read_order_file(file):
+    logging.info("Reading order file %s", file)
+    with open(file, 'r') as f:
+        return [int(l.strip()) for l in f.readlines()]               
+    
+def read_oslom2_tp_file(filepath):
+    node_dict = defaultdict(list) # initialize modules per node dictionary
+    with open(filepath, 'r') as file:
+        line = next(file)
+        while line:
+            if line.startswith('#'): # module header line
+                module_id = int(line.split()[1]) + 1 # 1-based (needed by gvmap) module id
+            else: # nodes in the module
+                nodes = line.split()
+                for node_id in nodes:
+                    node_dict[utils.to_int(node_id)].append(module_id) # add current module to node dictionary
+                    
+            line = next(file, None)
+    
+    return node_dict   
+    
+def read_infomap_tree_file(filepath, level):
+    node_dict = defaultdict(list) # initialize modules per node dictionary
+    module_ids = []
+    with open(filepath, 'r') as file:
+        line = next(file)
+        while line:
+            if not line.startswith('#'):
+                values = line.split()
+                module_id = ''.join(values[0].split(":")[0:level]) # concatenated module id at given level (1 to 3). 2:4:3 becomes 2 at level 1, 24 at level 2 and 243 at level 3
+                if not module_id in module_ids:
+                    module_ids.append(module_id)
+                node_id = values[2].strip('"') # node id without quotes
+                one_based_module_id = module_ids.index(module_id) + 1 # current 1-based (needed by gvmap) module id
+                if not one_based_module_id in node_dict[node_id]:
+                    node_dict[node_id].append(one_based_module_id) # add current module id to node dictionary
+                    
+            line = next(file, None)
+
+    return node_dict 
+
+def write_dgs_file(output, partition, graph, node_order, colour_attr):
+    filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
+    logging.info("Writing DGS file %s (partition %d)", filename, partition)
+    
+    with open(filename, 'w') as outf:
+        outf.write("DGS004\n")
+        outf.write("partition_{} 0 0\n".format(partition))
+
+        # sort nodes according to node_order
+        filtered_node_order = [node_order[node - 1] for node in graph.nodes()] # node x is at index x - 1 in the node_order list
+        sorted_nodes = [node for _,node in sorted(zip(filtered_node_order, graph.nodes(data=True)))]
+        
+        i = 0
+        st = 1
+        nodes_added = []
+        edges_added = []
+        for n in sorted_nodes:
+            node_id = n[0]
+
+            if colour_attr in n[1]:
+                colour = n[1][colour_attr] # get color(s) from attributes
+            else:
+                colour = 'black'
+
+            outf.write("an {} c='{}'\n".format(node_id, colour))
+            nodes_added += [node_id]
+
+            for e in graph.edges(node_id):
+                edge1_id = e[1]
+                edge2_id = e[0]
+                if edge1_id in nodes_added and edge2_id in nodes_added and (edge1_id, edge2_id) not in edges_added:
+                    outf.write("ae {} {} {}\n".format(i, edge1_id, edge2_id))
+                    edges_added += [(edge1_id, edge2_id)]
+                    i += 1
+
+            outf.write("st {}\n".format(st))
+            st += 1
+            
+    return filename
+    
+def write_oslom_edge_file(output_path, data_filename, G):
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+    if not os.path.exists(os.path.join(output_path, 'oslom')):
+        os.makedirs(os.path.join(output_path, 'oslom'))
+
+    # write edge list in a format for OSLOM, tab delimited
+    edges_oslom_filename = os.path.join(output_path, 'oslom', data_filename + "-edges-oslom.txt")
+    with open(edges_oslom_filename, "w") as outf:
+        for e in G.edges(data=True):
+            outf.write("{}\t{}\t{}\n".format(e[0], e[1], e[2]["weight"]))
+
+    return edges_oslom_filename
+    
+def write_pajek_file(output_path, data_filename, G):
+    pajek_filepath = os.path.join(output_path, data_filename + ".net")
+    nx.write_pajek(G, pajek_filepath)
+    return pajek_filepath

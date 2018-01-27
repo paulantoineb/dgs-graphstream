@@ -20,6 +20,7 @@ import org.graphstream.stream.file.FileSinkImages.OutputType;
 import org.graphstream.stream.file.FileSinkImages.OutputPolicy;
 import org.graphstream.stream.file.FileSinkImages.LayoutPolicy;
 import org.graphstream.stream.file.FileSinkImages.RendererType;
+import org.graphstream.stream.file.FileSinkImages.CustomResolution;
 import org.graphstream.stream.file.FileSinkDOT;
 import org.graphstream.stream.SinkAdapter;
 import org.graphstream.ui.layout.springbox.implementations.LinLog;
@@ -39,6 +40,8 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     private FileSinkImages fsi;
     private ProxyPipe pipe;
     private BarnesHutLayout layout;
+    private int nodeSize;
+    private int edgeSize;
     
     private enum LayoutType {
         LinLog,
@@ -50,7 +53,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         DotFile
     }
         
-    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath, long seed, float force, float a, float r, float theta, Boolean display)
+    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath, long seed, float force, float a, float r, float theta, int nodeSize, int edgeSize, int width, int height, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
@@ -60,9 +63,12 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         this.g = new DefaultGraph("graph");
         this.g.addAttribute("ui.stylesheet", "url('style.css')");
         
+        this.nodeSize = nodeSize;
+        this.edgeSize = edgeSize;
+        
         layout = CreateLayout(layout_type, seed, force, a, r, theta);
         
-        fsi = new FileSinkImages(OutputType.PNG, Resolutions.HD720);
+        fsi = new FileSinkImages("frame_", OutputType.PNG, new CustomResolution(width, height), OutputPolicy.NONE);
         fsi.setOutputPolicy(OutputPolicy.BY_STEP);
         fsi.setLayoutPolicy(LayoutPolicy.NO_LAYOUT);
         fsi.setQuality(Quality.HIGH);
@@ -206,6 +212,11 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         }
     }
     
+    public void nodeAdded(String sourceId, long timeId, String nodeId) {
+        Node n = this.g.getNode(nodeId);
+        n.setAttribute("ui.size", this.nodeSize);
+    }        
+    
     public void edgeAdded(String sourceId, long timeId, String edgeId,
             String fromNodeId, String toNodeId, boolean directed) {
         Edge e = this.g.getEdge(edgeId);
@@ -214,6 +225,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (style_attr != null) {
             e.setAttribute("ui.style", style_attr.split(";")[1] + ";");
         }
+        e.setAttribute("ui.size", this.edgeSize);
     }
     
     public static void main(String[] args) {
@@ -251,18 +263,22 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         }
         if (error || params.containsKey("help") || params.containsKey("h")) {
             System.out.println("usage: DgsGraphStreamAnimate.jar [OPTIONS]...");
-            System.out.println("-dgs <arg>      input GraphStream DGS file");
-            System.out.println("-out <arg>      frame filenames are prepended with this path");
-            System.out.println("-layout <arg>   layout type to use. options: [springbox|linlog]. default: springbox");
-            System.out.println("-seed <arg>     random seed for the layout");
-            System.out.println("-force <arg>    force for LinLog layout");
-			System.out.println("-a <arg>        attraction factor for LinLog layout");
-			System.out.println("-r <arg>        repulsion factor for LinLog layout");
-            System.out.println("-theta <arg>    theta for LinLog layout");
-            System.out.println("-mode <arg>     mode. options: [images|dot]. default: images");
-            System.out.println("-dotfile <arg>  output dot file");          
-            System.out.println("-display screen layout option to use. options: [screen]");
-            System.out.println("-h,-help        display this help and exit");
+            System.out.println("-dgs <arg>          input GraphStream DGS file");
+            System.out.println("-out <arg>          frame filenames are prepended with this path");
+            System.out.println("-layout <arg>       layout type to use. options: [springbox|linlog]. default: springbox");
+            System.out.println("-seed <arg>         random seed for the layout");
+            System.out.println("-force <arg>        force for LinLog layout");
+			System.out.println("-a <arg>            attraction factor for LinLog layout");
+			System.out.println("-r <arg>            repulsion factor for LinLog layout");
+            System.out.println("-theta <arg>        theta for LinLog layout");
+            System.out.println("-node_size <arg>    node size");
+            System.out.println("-edge_size <arg>    edge size");
+            System.out.println("-width <arg>        image width");
+            System.out.println("-height <arg>       image height");
+            System.out.println("-mode <arg>         mode. options: [images|dot]. default: images");
+            System.out.println("-dotfile <arg>      output dot file");          
+            System.out.println("-display screen     layout option to use. options: [screen]");
+            System.out.println("-h,-help            display this help and exit");
             System.exit(1);
         }
         
@@ -298,12 +314,28 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (params.containsKey("theta")) {
             theta = Float.parseFloat(params.get("theta").get(0));
         }
+        int nodeSize = 10; // default node size in pixels
+        if (params.containsKey("node_size")) {
+            nodeSize = Integer.parseInt(params.get("node_size").get(0));
+        }
+        int edgeSize = 2; // default edge size in pixels
+        if (params.containsKey("edge_size")) {
+            edgeSize = Integer.parseInt(params.get("edge_size").get(0));
+        }
+        int width = 1280; // default image width
+        if (params.containsKey("width")) {
+            width = Integer.parseInt(params.get("width").get(0));
+        }
+        int height = 720; // default image height
+        if (params.containsKey("height")) {
+            height = Integer.parseInt(params.get("height").get(0));
+        }
         
         try {
             System.out.println(params.get("dgs").get(0));
             DgsGraphStreamAnimate dgs = new DgsGraphStreamAnimate();
             
-            dgs.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0), seed, force, a, r, theta, display);
+            dgs.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0), seed, force, a, r, theta, nodeSize, edgeSize, width, height, display);
         } catch(IOException e) {
             e.printStackTrace();
         }

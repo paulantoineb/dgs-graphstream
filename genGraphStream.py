@@ -1,386 +1,283 @@
 #!/usr/bin/env python3
 
 import os
-import gzip
+import sys
 import glob
-import shutil
-import re
-import tempfile
-from colour import Color
-import colorsys
+import logging
 import argparse
-import itertools
 import subprocess
 import random
 import networkx as nx
-import pydot
-from collections import defaultdict
+
+import file_io
+import graph
+import color
+import cluster
+import utils
 
 DGSGS_JAR = 'dgs-graphstream/dist/dgs-graphstream.jar'
 
-def read_metis(DATA_FILENAME):
-
-    G = nx.Graph()
-
-    # add node weights from METIS file
-    with open(DATA_FILENAME, "r") as metis:
-
-        n = 0
-        first_line = None
-        has_edge_weights = False
-        has_node_weights = False
-        for i, line in enumerate(metis):
-            if line[0] == '%':
-                # ignore comments
-                continue
-
-            if not first_line:
-                # read meta data from first line
-                first_line = line.split()
-                m_nodes = int(first_line[0])
-                m_edges = int(first_line[1])
-                if len(first_line) > 2:
-                    # FMT has the following meanings:
-                    #  0  the graph has no weights (in this case, you can omit FMT)
-                    #  1  the graph has edge weights
-                    # 10  the graph has node weights
-                    # 11  the graph has both edge and node weights
-                    file_format = first_line[2]
-                    if int(file_format) == 0:
-                        pass
-                    elif int(file_format) == 1:
-                        has_edge_weights = True
-                    elif int(file_format) == 10:
-                        has_node_weights = True
-                    elif int(file_format) == 11:
-                        has_edge_weights = True
-                        has_node_weights = True
-                    else:
-                        assert False, "File format not supported"
-                continue
-
-            # METIS starts node count from 1, here we start from 0 by
-            # subtracting 1 in the edge list and incrementing 'n' after
-            # processing the line.
-            if line.strip():
-                e = line.split()
-                if has_edge_weights and has_node_weights:
-                    if len(e) > 2:
-                        # create weighted edge list:
-                        #  [(1, 2, {'weight':'2'}), (1, 3, {'weight':'8'})]
-                        edges_split = list(zip(*[iter(e[1:])] * 2))
-                        edge_list = [(n, int(v[0]) - 1, {'weight': int(v[1])}) for v in edges_split]
-
-                        G.add_edges_from(edge_list)
-                        G.node[n]['weight'] = int(e[0])
-                    else:
-                        # no edges
-                        G.add_nodes_from([n], weight=int(e[0]))
-
-                elif has_edge_weights and not has_node_weights:
-                    pass
-                elif not has_edge_weights and has_node_weights:
-                    pass
-                else:
-                    edge_list = [(n, int(v) - 1, {'weight':1.0}) for v in e]
-                    G.add_edges_from(edge_list)
-                    G.node[n]['weight'] = 1.0
-            else:
-                # blank line indicates no node weight
-                G.add_nodes_from([n], weight=1.0)
-            n += 1
-
-    # sanity check
-    assert (m_nodes == G.number_of_nodes()), "Expected {} nodes, networkx graph contains {} nodes".format(m_nodes, G.number_of_nodes())
-    assert (m_edges == G.number_of_edges()), "Expected {} edges, networkx graph contains {} edges".format(m_edges, G.number_of_edges())
-
-    return G
+def parse_arguments():
+    parser = argparse.ArgumentParser(description=
+        '''Create animation of network partition assignments. First processes
+        network file and assignments into DGS file format, then uses
+        GraphStream to animate each frame, finally frames are stitched together.'''
+    )
+    # Required arguments
+    required_group = parser.add_argument_group('required arguments')
+    required_group.add_argument('graph',
+                        help='Input graph file')
+    required_group.add_argument('-f', '--format', choices=['metis', 'dot'], required=True, # TODO replace with exclusive group -metis -edgelist?
+                        help='Format of the input graph file')
+    required_group.add_argument('-o', '--output_dir', required=True,
+                        help='Output directory')  
+    # Input/output files
+    io_group = parser.add_argument_group('input/outputs options')
     
-def read_dot(network):
-    return nx.nx_agraph.read_dot(network)
+    io_group.add_argument('-a', '--assignments',
+                        help='Partition assignments list')
+    order_group = io_group.add_mutually_exclusive_group()
+    order_group.add_argument('-n', '--order',
+                        help='Node order list')
+    order_group.add_argument('--order-seed',
+                        help='Random seed for ordering nodes')        
+    # Clustering
+    clustering_group = parser.add_argument_group('clustering options')
+    clustering_group.add_argument('--clustering', '-c', choices=['oslom2','infomap','graphviz'], default='oslom2',
+                        help='Clustering method')
+    clustering_group.add_argument('--cluster-seed', type=int, metavar='S',
+                        help='Seed for clustering')
+    # Layout
+    layout_group = parser.add_argument_group('layout options')
+    layout_group.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
+                        help='Graph layout')   
+    layout_group.add_argument('--layout-seed', type=int, default=utils.get_random_seed(), metavar='S',
+                        help='Seed for graph layout')
+    layout_group.add_argument('--force', type=float, metavar='F',
+                        help='Force for linlog graph layout (default=3.0)')
+    layout_group.add_argument('--attraction', type=float, metavar='A',
+                        help='Attraction factor for linlog graph layout (default=0)')
+    layout_group.add_argument('--repulsion', type=float, metavar='R',
+                        help='Repulsion factor for linlog graph layout (default=-1.2)')
+    # Coloring
+    coloring_group = parser.add_argument_group('coloring options')
+    coloring_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
+                        help='Seed for coloring with gvmap')
+    # Image style
+    styling_group = parser.add_argument_group('image options')
+    styling_group.add_argument('--node-size', type=int, default=10, metavar='S',
+                        help='Node size in pixels')
+    styling_group.add_argument('--edge-size', type=int, default=1, metavar='T',
+                        help='Edge size in pixels')
+    styling_group.add_argument('--border-size', type=int, default=1, metavar='T',
+                        help='Border size between tiles')
+    styling_group.add_argument('--width', type=int, default=1280, metavar='W',
+                        help='Image width')
+    styling_group.add_argument('--height', type=int, default=720, metavar='H',
+                        help='Image height')
+    # Video
+    video_group = parser.add_argument_group('video options')
+    video_group.add_argument('--video',
+                    help='Output video file with tiled frames')
+    video_group.add_argument('--fps', type=int,
+                        help='Frames per second (default=4)')
+    # Pdf
+    pdf_group = parser.add_argument_group('pdf options')
+    pdf_group.add_argument('--pdf-frequency', type=int, default=1, metavar='F', # TODO
+                        help='PDF generation frequency (every F steps)')
+
+    return parser.parse_args()
     
-def remove_string_from_file(file, string):
-    f = open(file,'r')
-    filedata = f.read()
-    f.close()
-    newdata = filedata.replace(string,"")
-    f = open(file,'w')
-    f.write(newdata)
-    f.close()
+def validate_arguments(args):
+    errors = []
+    if args.clustering == 'graphviz' and args.cluster_seed:
+        errors.append("The --cluster-seed option is not available with the graphviz clustering method")
+    if args.layout != 'linlog' and args.force:
+        errors.append("The --force option is only available with the linlog layout")
+    if args.layout != 'linlog' and args.attraction:
+        errors.append("The --attraction option is only available with the linlog layout")
+    if args.layout != 'linlog' and args.repulsion:
+        errors.append("The --repulsion option is only available with the linlog layout")
+    if not args.video and args.fps:
+        errors.append("The --fps option is only available with the --video option")
         
-def read_pajek(network):
-    remove_string_from_file(network, "ic ") # remove "ic" attribute from pajek file so that nx.read_pajek reads the node color (it only reads the first 7 attributes and the color is the 8th)
-    graph = nx.read_pajek(network)
-    return graph
-
-def read_assignments(assignments):
-    with open(assignments, 'r') as f:
-        # remove \n
-        return [int(l.strip()) for l in f.readlines()]
-
-def get_N_HexCol(N=5):
-    #HSV_tuples = [(x * 1.0 / N, 0.5, 0.5) for x in range(N)]
-    #hex_out = []
-    #for rgb in HSV_tuples:
-    #    rgb = map(lambda x: int(x * 255), colorsys.hsv_to_rgb(*rgb))
-    #    hex_out.append('#%02x%02x%02x' % tuple(rgb))
-    #return hex_out
-
-    hex_out = []
-    red = Color("red")
-    blue = Color("violet")
-    for c in red.range_to(blue, N):
-        hex_out.append(c.hex)
-    return hex_out
-
-def gen_colour_map(partitions_num):
-
-    groups = []
-    colour_map = {}
-    for p in range(0, partitions_num):
-        file_oslom = os.path.join('inputs', 'oslom-p{}-tp.txt'.format(p))
-        with open(file_oslom, 'r') as f:
-            for line in f.readlines():
-                if line[0] == '#':
-                    continue
-                groups += [line.strip()]
-
-    colours = get_N_HexCol(len(groups))
-    for i,cluster in enumerate(groups):
-        nodes = cluster.split(' ')
-        for n in nodes:
-            node = int(n)
-            if node in colour_map:
-                print('WARNING: Node {} already had a colour.'.format(node))
-            colour_map[node] = colours[i]
-
-    return colour_map
+    if errors:
+        for error in errors:
+            logging.error(error)
+        sys.exit(1)
+        
+    # Set default values
+    if not args.fps:
+        args.fps = 4
+    if not args.cluster_seed:
+        args.cluster_seed = utils.get_random_seed()
     
-def format_id(id):
-    return re.sub('[^0-9a-zA-Z]+', '_', id) # replace all non-alphanumeric characters by underscore
+def run(args):
+    # Clean output directory
+    utils.create_or_clean_output_dir(args.output_dir)
 
-def write_dgs(output, partition, graph, colour_map, colour_attr):
-
-    filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
+    # Read input graph
+    input_graph = file_io.read_graph_from_file(args.graph, args.format)
+    logging.info("The input graph contains %d nodes and %d edges", nx.number_of_nodes(input_graph), nx.number_of_edges(input_graph))
+      
+    # Read assignments and node order files
+    assignments = get_assignments(args.assignments, input_graph)
+    node_order = get_node_order(args.order, args.order_seed, input_graph)
+      
+    # Split graph into sub-graphs (one per partition)
+    sub_graphs = split_graph(input_graph, assignments)
     
-    with open(filename, 'w') as outf:
-        outf.write("DGS004\n")
-        outf.write("partition_{} 0 0\n".format(partition))
-
-        i = 0
-        st = 1
-        nodes_added = []
-        edges_added = []
-        for n in graph.nodes_iter(data=True):
-            node_id = format_id(n[0])
-            if colour_map:
-                colour = 'black'
-                if node_id in colour_map:
-                    colour = colour_map[node_id]
-            else:
-                if colour_attr in n[1]:
-                    colour = n[1][colour_attr] # get color(s) from attributes
-                else:
-                    colour = 'black'
-
-            outf.write("an {} c='{}'\n".format(node_id, colour))
-            nodes_added += [node_id]
-
-            for e in graph.edges_iter(data=True):
-                edge1_id = format_id(e[0])
-                edge2_id = format_id(e[1])
-                if edge1_id in nodes_added and edge2_id in nodes_added and (edge1_id, edge2_id) not in edges_added:
-                    outf.write("ae {} {} {}\n".format(i, edge1_id, edge2_id))
-                    edges_added += [(edge1_id, edge2_id)]
-                    i += 1
-
-            outf.write("st {}\n".format(st))
-            st += 1
-
-def create_or_clean_output_dir(directory):
-    if os.path.exists(directory):
-        shutil.rmtree(directory) # delete folder if it exists
-    os.makedirs(directory) # create folder
+    # Generate layout of each sub-graph
+    generate_layouts(sub_graphs, args.output_dir, node_order, args.layout, args.layout_seed, args.force, args.attraction, args.repulsion, args.node_size, args.edge_size, args.width, args.height)
+     
+    # Perform clustering of each sub-graph
+    clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering, args.cluster_seed)
+        
+    # Perform coloring
+    perform_coloring(sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, args.color_seed)
     
-def relabel_graph(graph):
-    # relabel nodes with id instead of label
-    mapping = {n[0]:n[1]['id'] for n in graph.nodes_iter(data=True)}
-    return nx.relabel_nodes(graph, mapping)
+    # Generate frames for each sub-graph
+    for index, sub_graph in enumerate(sub_graphs):       
+        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, node_order, 'fillcolor')    
+        generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed, args.force, args.attraction, args.repulsion, args.node_size, args.edge_size, args.width, args.height, 'images') # compute layout from dgs file and write images
+      
+    # Combine frames into tiles
+    if args.video:
+        combine_images_into_tiles(args.output_dir, assignments, len(sub_graphs), args.border_size)
+        create_video_from_tiles(args.output_dir, args.video, args.fps)
     
-def read_graph_from_file(network, format, using_infomap):
-    graph = None
-    if format == 'metis':
-        graph = read_metis(network)
-    elif format == 'dot':
-        graph = read_dot(network)
-    elif format == 'pajek':
-        graph = read_pajek(network) 
-        if using_infomap:   
-            graph = relabel_graph(graph) # relabel graph with id for infomap as infomap's .tree file use the id to refer to the nodes while OSLOM2 tp file use the label
-          
-    return graph
-    
-def get_colour_attribute(format):
-    if format == 'metis':
-        colour_attr = "" # use colour_map
-    elif format == 'dot':
-        colour_attr = "fillcolor"
+def get_assignments(assignments_file, graph):
+    if assignments_file:
+        # Extracting assignments from file
+        assignments = file_io.read_assignments_file(assignments_file)
+        logging.info("%d assignments were found", len(assignments))
+        if len(assignments) != nx.number_of_nodes(graph):
+            logging.warning("The assignments file doesn't contain the same number of lines than the number of nodes in the graph")
     else:
-        colour_attr = "box"
-    return colour_attr
-
-def gen_dgs_files(network, format, assignments_f, output, partitions_num, colour_map, using_infomap):
-    graph = read_graph_from_file(network, format, using_infomap)
-    colour_attr = get_colour_attribute(format)
-    assignments = read_assignments(assignments_f)
+        # Add all nodes to a single partition
+        assignments = [0] * nx.number_of_nodes(graph)
+    return assignments
     
-    if partitions_num == 1:
-        write_dgs(output, 0, graph, colour_map, colour_attr) # ignore assignments file if single partition (TEMPORARY)
+def get_node_order(order_file, order_seed, graph):
+    if order_file:
+        # Extracting node order from file
+        node_order = file_io.read_order_file(order_file)
+        logging.info("%d node orders were found", len(node_order))
+        if len(node_order) != nx.number_of_nodes(graph):
+            logging.warning("The node order file doesn't contain the same number of lines than the number of nodes in the graph")
     else:
-        for p in range(0, partitions_num):
-            nodes = [i for i,x in enumerate(assignments) if x == p]
-            Gsub = graph.subgraph(nodes)
-            write_dgs(output, p, Gsub, colour_map, colour_attr)
+        # Generate random order
+        node_order = list(range(nx.number_of_nodes(graph)))
+        random.seed(order_seed)
+        random.shuffle(node_order)
+    return node_order
+    
+def split_graph(input_graph, assignments):
+    partitions = get_partitions(assignments) # Getting partitions from the assignments
+    log_partitions_info(partitions, assignments)
+    sub_graphs = graph.create_sub_graphs(input_graph, partitions, assignments)
+    return sub_graphs
 
-def gen_frames(output, partitions_num, layout, seed, force, a, r, mode):
-    for p in range(0, partitions_num):
-        dgs = os.path.join(output, 'partition_{}.dgs'.format(p))
-        output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
-        out = os.path.join(output, 'frames_partition/p{}_'.format(p))
-        args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs, '-out', out, '-layout', layout, '-seed', str(seed), '-force', str(force), '-a', str(a), '-r', str(r), '-mode', mode, '-dotfile', output_dot_filepath]
+def get_partitions(assignments):
+    unique_assignments = set(assignments)
+    try:
+        unique_assignments.remove(-1) # remove '-1' (node to be excluded)
+    except KeyError:
+       pass
+    return unique_assignments
+    
+def log_partitions_info(partitions, assignments):
+    logging.info("Found %d partitions in the assignments", len(partitions))
+    for partition in partitions:
+        logging.info("[Partition %d contains %d nodes]", partition, len([p for p in assignments if p == partition]))
+    logging.info("[Number of nodes excluded: %d]", len([p for p in assignments if p == -1]))
+    
+def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, attraction, repulsion, node_size, edge_size, width, height):
+    for index, sub_graph in enumerate(sub_graphs):       
+        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, None)            
+        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size, edge_size, width, height, 'dot') # compute layout from dgs file and write dot file
+        pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True) 
+        nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
+    
+def perform_clustering(sub_graphs, output_dir, clustering, cluster_seed):
+    clusters_per_node_per_graph = []
+    for index, sub_graph in enumerate(sub_graphs):
+        logging.info("Performing clustering (%s) on sub-graph %d", clustering, index)
+        clusters_per_node = run_clustering(output_dir, clustering, sub_graph, cluster_seed)
+        if clustering != 'graphviz': # clustering done directly by graphviz
+            cluster.create_cluster_for_homeless_nodes(sub_graph, clusters_per_node) # add homeless nodes cluster
+        clusters_per_node_per_graph.append(clusters_per_node)
+    return clusters_per_node_per_graph
+    
+def run_clustering(output, clustering_method, graph, cluster_seed):
+    clusters_per_node = {}
+    if clustering_method == 'oslom2':
+        oslom_edge_file = file_io.write_oslom_edge_file(output, "oslom_edge_file", graph)                                                
+        cluster.run_oslom2(output, oslom_edge_file, cluster_seed)
+        output_tp_file = os.path.join(oslom_edge_file + "_oslo_files", "tp") # or tp1 or tp2 (to be exposed as parameter)
+        clusters_per_node = file_io.read_oslom2_tp_file(output_tp_file)
+    elif clustering_method == 'infomap':
+        pajek_file = file_io.write_pajek_file(output, "pajek_file", graph)
+        cluster.run_infomap(output, pajek_file, cluster_seed)
+        output_tree_file = os.path.splitext(pajek_file)[0]+'.tree'
+        level = 1 # to be exposed as parameter
+        clusters_per_node = file_io.read_infomap_tree_file(output_tree_file, level) # get cluster(s) from Infomap .tree file
+    return clusters_per_node
+    
+def perform_coloring(sub_graphs, clusters_per_node_per_graph, clustering, output_dir, color_seed):
+    if clustering != 'graphviz':
+        # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
+        cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
+        for index, clusters_per_node in enumerate(clusters_per_node_per_graph):   
+            cluster.add_clusters_to_graph(sub_graphs[index], clusters_per_node) 
+    
+    # Add width and height attributes (required by gvmap)
+    for sub_graph in sub_graphs:   
+        attributes = {node:0.5 for node in sub_graph.nodes()}
+        graph.add_node_attribute_to_graph(sub_graph, 'height', attributes)
+        graph.add_node_attribute_to_graph(sub_graph, 'width', attributes)
+
+    # Offset each subgraph to avoid them overlapping (required by gvmap)
+    graph.offset_graphs_to_avoid_overlaps(sub_graphs, 50.0)
+    
+    # Merge sub-graphs for gvmap
+    merged_graph_dot_filepath = os.path.join(output_dir, 'merged_graph.dot')
+    graph.merge_graphs(sub_graphs, merged_graph_dot_filepath)
+    
+    # Color nodes with gvmap
+    gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath)
+    
+    # Extract colors from gvmap output and update partition graphs
+    color.add_colors_to_partition_graphs(gvmap_dot_file, sub_graphs, clusters_per_node_per_graph)
+    
+def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, edge_size, width, height, mode):
+    output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
+    out = os.path.join(output, 'frames_partition/p{}_'.format(p))
+    if mode == 'dot':
+        logging.info("Generating graph layout for DGS file %s and exporting it in dot file %s", dgs_file, output_dot_filepath)
+    else:
+        logging.info("Generating graph images (%s) for DGS file %s", out, dgs_file)
+    args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs_file, '-out', out, '-layout', layout, '-seed', str(seed), 
+                    '-node_size', str(node_size), '-edge_size', str(edge_size), 
+                    '-width', str(width), '-height', str(height), 
+                    '-mode', mode, '-dotfile', output_dot_filepath]
+    if force:
+        args += ['-force', str(force)]
+    if a:
+        args += ['-a', str(a)]
+    if r:
+        args += ['-r', str(r)]
+    logging.debug("dgs-graphstream.jar command: %s", ' '.join(args))
+    graphstream_log = os.path.join(output, "graphstream.log")
+    with open(graphstream_log, "w") as logwriter:
         retval = subprocess.call(
             args, cwd='.',
+            stdout=logwriter,
             stderr=subprocess.STDOUT)
-            
-def compute_layout_and_export_dot_file(args):
-    gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, None, args.tree != None) # generate dgs file from input file
-    gen_frames(args.output, args.num_partitions, args.layout, args.seed, args.force, args.a, args.r, 'dot') # compute layout from dgs file and write dot file
-    clusters_per_node = add_clusters_to_dot_file(args)
-    return clusters_per_node
-    
-def read_oslom2_tp_file(filepath):
-    node_dict = defaultdict(list) # initialize modules per node dictionary
-    with open(filepath, 'r') as file:
-        line = next(file)
-        while line:
-            if line.startswith('#'): # module header line
-                module_id = int(line.split()[1]) + 1 # 1-based (needed by gvmap) module id
-            else: # nodes in the module
-                nodes = line.split()
-                for node_id in nodes:
-                    node_dict[node_id].append(module_id) # add current module to node dictionary
-                    
-            line = next(file, None)
-    
-    return node_dict   
-    
-def read_infomap_tree_file(filepath, level):
-    node_dict = defaultdict(list) # initialize modules per node dictionary
-    module_ids = []
-    with open(filepath, 'r') as file:
-        line = next(file)
-        while line:
-            if not line.startswith('#'):
-                values = line.split()
-                module_id = ''.join(values[0].split(":")[0:level]) # concatenated module id at given level (1 to 3). 2:4:3 becomes 2 at level 1, 24 at level 2 and 243 at level 3
-                if not module_id in module_ids:
-                    module_ids.append(module_id)
-                node_id = values[2].strip('"') # node id without quotes
-                node_dict[node_id].append(module_ids.index(module_id) + 1) # add current 1-based (needed by gvmap) module id to node dictionary
-                    
-            line = next(file, None)
-    
-    return node_dict   
+    return output_dot_filepath    
 
-def prune_invalid_keys_from_dictionary(valid_keys, dictionary):   
-    to_be_removed = []
-    for key, value in dictionary.items():
-        if not key in valid_keys:
-            to_be_removed.append(key)
-    for key in to_be_removed:
-        del dictionary[key]
-        
-def add_node_attribute_to_dot_file(filepath, attribute_name, dictionary):
-    # use pydot instead of networkx to edit dot file since networkx "nx.nx_agraph.write_dot" method messed up the formatting and order of dot file
-    graph = pydot.graph_from_dot_file(filepath)[0]
-    for node in graph.get_nodes():
-        name = node.get_name().replace('"', '')
-        if name in dictionary:
-            value = dictionary[name]
-            node.set(attribute_name, value)
-    graph.write(filepath)
-    
-def get_node_attribute_from_dot_file(filepath, attribute_name):
-    dictionary = {}
-    output_graph = pydot.graph_from_dot_file(filepath)[0]
-    for node in output_graph.get_nodes():
-        name = node.get_name().strip('"')
-        if name != 'graph':
-            dictionary[name] = node.get(attribute_name)
-    return dictionary
-    
-def add_clusters_to_dot_file(args):    
-    partition = 0 # TEMPORARY
-    input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition))   
-    
-    clusters_per_node = None
-    if args.tp:
-        clusters_per_node = read_oslom2_tp_file(args.tp) # get cluster(s) from OSLOM2 tp file
-    elif args.tree:
-        level = 1
-        clusters_per_node = read_infomap_tree_file(args.tree, level) # get cluster(s) from Infomap .tree file
-    
-    # remove non-existent nodes from clusters_per_node dictionary
-    graph = read_dot(input_dot_filename)
-    node_ids = [n[0] for n in graph.nodes_iter(data=True)]
-    prune_invalid_keys_from_dictionary(node_ids, clusters_per_node)
-    
-    # add cluster attribute to dot file
-    first_cluster_per_node = {k:v[0] for k,v in clusters_per_node.items()} # gvmap only supports a single cluster per node
-    add_node_attribute_to_dot_file(input_dot_filename, 'cluster', first_cluster_per_node)
-    
-    return clusters_per_node
-
-def color_nodes_with_gvmap(args, clusters_per_node, using_infomap):
-    partition = 0 # TEMPORARY
-    input_dot_filename = os.path.join(args.output, 'partition_{}.dot'.format(partition)) 
-    output_dot_filename = os.path.join(args.output, 'partition_{}_out.dot'.format(partition)) 
-    args = ['gvmap', '-e', '-w', '-d', str(args.seed), input_dot_filename] # "-w option is only available with this graphviz fork https://gitlab.com/paulantoineb/graphviz
-    output_file = open(output_dot_filename, "w")
-    retval = subprocess.call(
-            args, cwd='.',
-            stderr=subprocess.STDOUT,
-            stdout=output_file)
-    output_file.close()
-    
-    ### extract node color from gvmap's output and add it to the input graph (gvmap reorders nodes and edges which affects dgs)
-    color_per_node = get_node_attribute_from_dot_file(output_dot_filename, 'fillcolor') 
-    colors_per_node = get_colors_per_node(color_per_node, clusters_per_node) # combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node  
-    add_node_attribute_to_dot_file(input_dot_filename, 'fillcolor', color_per_node if using_infomap else colors_per_node)
-
-    return input_dot_filename
-
-''' 
-Combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node
-'''
-def get_colors_per_node(color_per_node, clusters_per_node):
-    # get cluster to color mapping
-    cluster_to_color = {}
-    for node, clusters in clusters_per_node.items():
-        first_cluster = clusters[0] # consider only the first cluster as it was the one passed to gvmap for coloring
-        if not first_cluster in cluster_to_color:
-            if node in color_per_node:                  
-                color = color_per_node[node]
-                cluster_to_color[first_cluster] = color
-                
-    # get colors per node
-    colors_per_node = {}
-    for node, clusters in clusters_per_node.items():
-        colors = [cluster_to_color[cluster] for cluster in clusters]
-        colors_per_node[node] = ','.join([c.strip('"') for c in colors])
-    return colors_per_node
-
-def join_images(output, assignments_f, partitions_num):
+def combine_images_into_tiles(output, assignments, partitions_num, border_size):
+    logging.info("Combining images into tiles")
     frames = {}
     frames_max = 0
     for p in range(0, partitions_num):
@@ -395,14 +292,8 @@ def join_images(output, assignments_f, partitions_num):
         os.makedirs(path_joined)
 
     pframe = [-1] * partitions_num
-    #tiles = [frames[f][0] for f in frames]
     tiles = ['frame_blank.png'] * partitions_num
 
-    if partitions_num == 1:
-        assignments = [0] * frames_max # ignore assignments file if single partition (TEMPORARY)
-    else:
-        assignments = read_assignments(assignments_f)
-    
     f = 0
     for a in assignments:
         if a == -1: # XXX remove > 3
@@ -414,7 +305,8 @@ def join_images(output, assignments_f, partitions_num):
 
             args = ['/usr/bin/montage']
             args += tiles
-            args += ['-geometry', '+0+0', '-border', '6', os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))]
+            args += ['-geometry', '+0+0', '-border', str(border_size), os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))]
+            logging.debug("montage command: %s", ' '.join(args))
             retval = subprocess.call(
                 args, cwd='.',
                 stderr=subprocess.STDOUT)
@@ -423,103 +315,24 @@ def join_images(output, assignments_f, partitions_num):
 
         except IndexError:
             print('Missing frame p{}_{}'.format(a, pframe[a]))
-
-
-    #    nodes = [i for i,x in enumerate(assignments) if x == p]
-
-    #for f in range(0, frames_max):
-    #    tiles = []
-    #    for p in range(0, 4):
-    #        if len(frames[p]) > f:
-    #            tiles += [frames[p][f]]
-    #        else:
-    #            # use last frame
-    #            tiles += [frames[p][len(frames[p])-1]]
-
-    #    #args = ['/usr/bin/convert']
-    #    #args += tiles
-    #    #args += ['-append', os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))]
-
-    #    args = ['/usr/bin/montage']
-    #    args += tiles
-    #    args += ['-geometry', '+0+0', '-border', '6', os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))]
-    #    retval = subprocess.call(
-    #        args, cwd='.',
-    #        stderr=subprocess.STDOUT)
-
-
-
-
+            
+def create_video_from_tiles(output_directory, video_file, fps):
+    logging.info("Creating video %s from tiles", video_file)
+    args = ['ffmpeg', '-framerate', str(fps), '-i', 'output/frames_joined/frame_%6d.png', '-pix_fmt', 'yuv420p', '-r', '10', video_file]
+    logging.debug("ffmpeg command: %s", ' '.join(args))
+    log_file = os.path.join(output_directory, "ffmpeg.log")
+    with open(log_file, "w") as logwriter:
+        retval = subprocess.call(args, stdout=logwriter, stderr=subprocess.STDOUT) 
+      
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=
-        '''Create animation of network parition assignments. First processes
-        network file and assignments into DGS file format, then uses
-        GraphStream to animate each frame, finally frames are stitched together.'''
-    )
-    parser.add_argument('network',
-                        help='Input network file')
-    parser.add_argument('assignments',
-                        help='Partition assignments list')
-    parser.add_argument('output',
-                        help='Output directory')
-    parser.add_argument('--tp',
-                        help='OSLOM2 tp file')
-    parser.add_argument('--tree',
-                        help='Infomap .tree file')
-    parser.add_argument('--format', choices=['metis', 'dot', 'pajek'], default='metis', help='Format of the input network')
-    parser.add_argument('--num-partitions', '-n', type=int, default=4, metavar='N',
-                        help='Number of partitions')
-    parser.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
-                        help='Graph layout')
-    parser.add_argument('--seed', '-s', type=int, default=random.randint(1, 10**6), metavar='S',
-                        help='Seed for graph layout')
-    parser.add_argument('--force', '-f', type=float, default=3.0, metavar='F',
-                        help='Force for linlog graph layout')
-    parser.add_argument('-a', type=float, default=0, metavar='A',
-                        help='Attraction factor for linlog graph layout')
-    parser.add_argument('-r', type=float, default=-1.2, metavar='R',
-                        help='Repulsion factor for linlog graph layout')
-    parser.add_argument('--dgs', action='store_true', default=False,
-                        help='Generate GraphStream DGS file')
-    parser.add_argument('--frames', action='store_true', default=False,
-                        help='Convert GraphStream DGS file to frames')
-    parser.add_argument('--join', action='store_true', default=False,
-                        help='Tile frames in a montage')
+    # Initialize logging
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    
+    # Parse arguments
+    args = parse_arguments()
+    validate_arguments(args)   
 
-    args = parser.parse_args()
+    # Run dgs-graphstream
+    run(args)
 
-    all_args = False
-    if not args.dgs and not args.frames and not args.join:
-        all_args = True
-        
-    create_or_clean_output_dir(args.output)
-    using_infomap = args.tree != None
-        
-    if args.format != "metis": # compute layout with Graphstream and color nodes with gvmap
-        clusters_per_node = compute_layout_and_export_dot_file(args)
-        output_dot_filename = color_nodes_with_gvmap(args, clusters_per_node, using_infomap)   
-        args.network = output_dot_filename
-        args.format = "dot"
-
-    if args.dgs or all_args:
-        if args.format == "metis":
-            print("Generating colour map...")
-            colour_map = gen_colour_map(args.num_partitions)
-        else:
-            print("Using colours from input file")
-            colour_map = None
-        print("Generating GraphStream DGS files...")
-        gen_dgs_files(args.network, args.format, args.assignments, args.output, args.num_partitions, colour_map, using_infomap)
-        print("Done")
-
-    if args.frames or all_args:
-        print("Using GraphStream to generate frames...")
-        gen_frames(args.output, args.num_partitions, args.layout, args.seed, args.force, args.a, args.r, 'images')
-        print("Done.")
-
-    if args.join or all_args:
-        print("Join frame tiles to video frames...")
-        join_images(args.output, args.assignments, args.num_partitions)
-        print("Done.")
-
-
+    logging.info("Done")

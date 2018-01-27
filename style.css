@@ -2,12 +2,14 @@ graph {
     fill-color: rgb(255,255,255);
 }
 edge {
+    size-mode: dyn-size;
     size: 2px;
     /*shape: cubic-curve;*/
     /*shape: blob;*/
 }
 node {
-    size: 40px;
+    size-mode: dyn-size;
+	size: 10px;
 	stroke-mode:plain;
 	stroke-width:2px;
 	stroke-color:#FFF8;
