@@ -75,6 +75,8 @@ def parse_arguments():
                         help='edge size in pixels')
     styling_group.add_argument('--label-size', type=int, default=10, metavar='S',
                         help='label size in points')
+    styling_group.add_argument('--label-type', choices=['id', 'order'], default='id', metavar='T', 
+                        help='type of node labels (node id or node order)')
     styling_group.add_argument('--border-size', type=int, default=1, metavar='S',
                         help='border size between tiles')
     styling_group.add_argument('--width', type=int, default=1280, metavar='W',
@@ -164,7 +166,7 @@ def run(args, config):
     # Generate layout of each sub-graph
     generate_layouts(sub_graphs, args.output_dir, node_order, args.layout, args.layout_seed, 
                      args.force, args.attraction, args.repulsion, 
-                     args.node_size, args.edge_size, args.label_size, args.width, args.height)
+                     args.node_size, args.edge_size, args.label_size, args.label_type, args.width, args.height)
      
     # Perform clustering of each sub-graph
     clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering, 
@@ -176,7 +178,7 @@ def run(args, config):
     
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):       
-        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, node_order, 'fillcolor')    
+        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, node_order, args.label_type, 'fillcolor')    
         generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed, 
                         args.force, args.attraction, args.repulsion,
                         args.node_size, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
@@ -239,9 +241,9 @@ def log_partitions_info(partitions, assignments):
         logging.info("[Partition %d contains %d nodes]", partition, len([p for p in assignments if p == partition]))
     logging.info("[Number of nodes excluded: %d]", len([p for p in assignments if p == -1]))
     
-def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, width, height):
+def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, label_type, width, height):
     for index, sub_graph in enumerate(sub_graphs):       
-        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, None)            
+        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, label_type, None)            
         dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True) 
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)

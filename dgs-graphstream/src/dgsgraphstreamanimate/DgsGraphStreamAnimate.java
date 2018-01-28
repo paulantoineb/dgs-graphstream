@@ -201,10 +201,8 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     @Override
     public void nodeAttributeChanged(String sourceId, long timeId,
                     String nodeId, String attribute, Object oldValue, Object newValue) {
-
-        if (attribute.equals("c")) {
-            Node n = this.g.getNode(nodeId);
-            
+        if (attribute.equals("c")) { // color
+            Node n = this.g.getNode(nodeId);          
 
             int count = newValue.toString().length() - newValue.toString().replace(",", "").length() + 1;
             float share = 1.0f / (float)count;
@@ -213,6 +211,9 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
 
             n.setAttribute("ui.style", "shape: pie-chart; fill-color: " + newValue.toString() + ";");
             n.setAttribute("ui.pie-values", pie_values);
+        } else if (attribute.equals("l")) { // label
+            Node n = this.g.getNode(nodeId);  
+            n.addAttribute("label", newValue.toString());
         }
     }
     
@@ -221,7 +222,6 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         n.setAttribute("ui.size", this.nodeSize);
         if (this.labelSize > 0) {
             n.addAttribute("text-size", this.labelSize);
-            n.addAttribute("label", nodeId);
         }
     }        
     

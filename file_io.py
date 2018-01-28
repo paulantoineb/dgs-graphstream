@@ -155,7 +155,7 @@ def filter_node_order(node_order, graph):
             filtered_node_order.append(-1) # node not found in node_order list
     return filtered_node_order
     
-def write_dgs_file(output, partition, graph, node_order, colour_attr):
+def write_dgs_file(output, partition, graph, node_order, label_type, colour_attr):
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
     
@@ -178,8 +178,13 @@ def write_dgs_file(output, partition, graph, node_order, colour_attr):
                 colour = n[1][colour_attr] # get color(s) from attributes
             else:
                 colour = 'black'
+            
+            if label_type == 'id':
+                label = node_id
+            else:
+                label = node_order[node_id - 1] # node x is at index x - 1 in the node_order list
 
-            outf.write("an {} c='{}'\n".format(node_id, colour))
+            outf.write("an {} c='{}' l='{}'\n".format(node_id, colour, label))
             nodes_added += [node_id]
 
             for e in graph.edges(node_id):
