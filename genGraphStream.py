@@ -8,6 +8,7 @@ import argparse
 import configparser
 import subprocess
 import random
+import fpdf
 import networkx as nx
 
 import file_io
@@ -88,8 +89,8 @@ def parse_arguments():
                         help='frames per second (default=4)')
     # Pdf
     pdf_group = parser.add_argument_group('pdf options')
-    pdf_group.add_argument('--pdf-frequency', type=int, default=1, metavar='F', # TODO
-                        help='pdf generation frequency (every F steps)')
+    pdf_group.add_argument('--pdf', type=int, default=20, metavar='P',
+                        help='Percentage of frames to convert to pdf (default=20)')
 
     return parser.parse_args()
     
@@ -181,9 +182,16 @@ def run(args, config):
                         args.node_size, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
       
     # Combine frames into tiles
+    if args.video or args.pdf:
+        frame_files = combine_images_into_tiles(args.output_dir, assignments, len(sub_graphs), args.border_size)
+     
+    # Convert frames to video 
     if args.video:
-        combine_images_into_tiles(args.output_dir, assignments, len(sub_graphs), args.border_size)
         create_video_from_tiles(args.output_dir, args.video, args.fps)
+        
+    # Convert frames to pdfs
+    if args.pdf:
+        create_pdfs_from_tiles(args.output_dir, frame_files, args.pdf)
     
 def get_assignments(assignments_file, graph):
     if assignments_file:
@@ -333,6 +341,7 @@ def combine_images_into_tiles(output, assignments, partitions_num, border_size):
     pframe = [-1] * partitions_num
     tiles = ['frame_blank.png'] * partitions_num
 
+    frame_files = []
     f = 0
     for a in assignments:
         if a == -1: # XXX remove > 3
@@ -342,9 +351,12 @@ def combine_images_into_tiles(output, assignments, partitions_num, border_size):
             pframe[a] += 1
             tiles[a] = frames[a][pframe[a]]
 
+            frame_file = os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))
+            frame_files.append(frame_file)
+            
             args = ['/usr/bin/montage']
             args += tiles
-            args += ['-geometry', '+0+0', '-border', str(border_size), os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))]
+            args += ['-geometry', '+0+0', '-border', str(border_size), frame_file]
             logging.debug("montage command: %s", ' '.join(args))
             retval = subprocess.call(
                 args, cwd='.',
@@ -355,6 +367,8 @@ def combine_images_into_tiles(output, assignments, partitions_num, border_size):
         except IndexError:
             print('Missing frame p{}_{}'.format(a, pframe[a]))
             
+    return frame_files
+            
 def create_video_from_tiles(output_directory, video_file, fps):
     logging.info("Creating video %s from tiles", video_file)
     args = ['ffmpeg', '-framerate', str(fps), '-i', 'output/frames_joined/frame_%6d.png', '-pix_fmt', 'yuv420p', '-r', '10', video_file]
@@ -362,7 +376,22 @@ def create_video_from_tiles(output_directory, video_file, fps):
     log_file = os.path.join(output_directory, "ffmpeg.log")
     with open(log_file, "w") as logwriter:
         retval = subprocess.call(args, stdout=logwriter, stderr=subprocess.STDOUT) 
-      
+        
+def create_pdfs_from_tiles(output_dir, frame_files, pdf_percentage):
+    pdf_dir = os.path.join(output_dir, 'pdf')
+    if not os.path.exists(pdf_dir):
+        os.makedirs(pdf_dir)
+    # filter frames to be converted to pdfs
+    step = int(pdf_percentage / 100.0 * len(frame_files))
+    logging.info("Exporting every %d frames (every %d%%) as pdf", step, pdf_percentage)
+    filtered_frame_files = list(reversed(frame_files))[0::step]
+    for frame_file in filtered_frame_files:
+        pdf = fpdf.FPDF('L', 'mm', 'A4')
+        pdf.add_page()
+        pdf.image(frame_file, w=277) # 277mm width to center image (default margin = 10mm)
+        pdf_file = os.path.join(pdf_dir, os.path.splitext(os.path.basename(frame_file))[0]+'.pdf')
+        pdf.output(pdf_file, "F")
+    
 if __name__ == '__main__':
     # Initialize logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
