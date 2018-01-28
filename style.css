@@ -13,4 +13,5 @@ node {
 	stroke-mode:plain;
 	stroke-width:2px;
 	stroke-color:#FFF8;
+    text-alignment: above;
 }

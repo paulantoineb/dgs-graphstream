@@ -42,6 +42,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     private BarnesHutLayout layout;
     private int nodeSize;
     private int edgeSize;
+    private int labelSize;
     
     private enum LayoutType {
         LinLog,
@@ -53,7 +54,9 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         DotFile
     }
         
-    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath, long seed, float force, float a, float r, float theta, int nodeSize, int edgeSize, int width, int height, Boolean display)
+    private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath, 
+                            long seed, float force, float a, float r, float theta, 
+                            int nodeSize, int edgeSize, int labelSize, int width, int height, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
@@ -61,10 +64,11 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         FileSourceDGS dgs = new FileSourceDGS();
         
         this.g = new DefaultGraph("graph");
-        this.g.addAttribute("ui.stylesheet", "url('style.css')");
+        this.g.addAttribute("ui.stylesheet", "url('style.css')"); 
         
         this.nodeSize = nodeSize;
         this.edgeSize = edgeSize;
+        this.labelSize = labelSize;
         
         layout = CreateLayout(layout_type, seed, force, a, r, theta);
         
@@ -215,6 +219,10 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     public void nodeAdded(String sourceId, long timeId, String nodeId) {
         Node n = this.g.getNode(nodeId);
         n.setAttribute("ui.size", this.nodeSize);
+        if (this.labelSize > 0) {
+            n.addAttribute("text-size", this.labelSize);
+            n.addAttribute("label", nodeId);
+        }
     }        
     
     public void edgeAdded(String sourceId, long timeId, String edgeId,
@@ -322,6 +330,10 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (params.containsKey("edge_size")) {
             edgeSize = Integer.parseInt(params.get("edge_size").get(0));
         }
+        int labelSize = 0; // default label size in points
+        if (params.containsKey("label_size")) {
+            labelSize = Integer.parseInt(params.get("label_size").get(0));
+        }
         int width = 1280; // default image width
         if (params.containsKey("width")) {
             width = Integer.parseInt(params.get("width").get(0));
@@ -335,7 +347,8 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             System.out.println(params.get("dgs").get(0));
             DgsGraphStreamAnimate dgs = new DgsGraphStreamAnimate();
             
-            dgs.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0), seed, force, a, r, theta, nodeSize, edgeSize, width, height, display);
+            dgs.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0), 
+                           seed, force, a, r, theta, nodeSize, edgeSize, labelSize, width, height, display);
         } catch(IOException e) {
             e.printStackTrace();
         }

@@ -69,9 +69,11 @@ def parse_arguments():
     styling_group = parser.add_argument_group('image options')
     styling_group.add_argument('--node-size', type=int, default=10, metavar='S',
                         help='node size in pixels')
-    styling_group.add_argument('--edge-size', type=int, default=1, metavar='T',
+    styling_group.add_argument('--edge-size', type=int, default=1, metavar='S',
                         help='edge size in pixels')
-    styling_group.add_argument('--border-size', type=int, default=1, metavar='T',
+    styling_group.add_argument('--label-size', type=int, default=10, metavar='S',
+                        help='label size in points')
+    styling_group.add_argument('--border-size', type=int, default=1, metavar='S',
                         help='border size between tiles')
     styling_group.add_argument('--width', type=int, default=1280, metavar='W',
                         help='image width')
@@ -136,7 +138,9 @@ def run(args):
     sub_graphs = split_graph(input_graph, assignments)
     
     # Generate layout of each sub-graph
-    generate_layouts(sub_graphs, args.output_dir, node_order, args.layout, args.layout_seed, args.force, args.attraction, args.repulsion, args.node_size, args.edge_size, args.width, args.height)
+    generate_layouts(sub_graphs, args.output_dir, node_order, args.layout, args.layout_seed, 
+                     args.force, args.attraction, args.repulsion, 
+                     args.node_size, args.edge_size, args.label_size, args.width, args.height)
      
     # Perform clustering of each sub-graph
     clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering, args.cluster_seed, args.infomap_calls)
@@ -147,7 +151,9 @@ def run(args):
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):       
         dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, node_order, 'fillcolor')    
-        generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed, args.force, args.attraction, args.repulsion, args.node_size, args.edge_size, args.width, args.height, 'images') # compute layout from dgs file and write images
+        generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed, 
+                        args.force, args.attraction, args.repulsion,
+                        args.node_size, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
       
     # Combine frames into tiles
     if args.video:
@@ -200,10 +206,10 @@ def log_partitions_info(partitions, assignments):
         logging.info("[Partition %d contains %d nodes]", partition, len([p for p in assignments if p == partition]))
     logging.info("[Number of nodes excluded: %d]", len([p for p in assignments if p == -1]))
     
-def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, attraction, repulsion, node_size, edge_size, width, height):
+def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, width, height):
     for index, sub_graph in enumerate(sub_graphs):       
         dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, None)            
-        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size, edge_size, width, height, 'dot') # compute layout from dgs file and write dot file
+        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True) 
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
     
@@ -258,7 +264,7 @@ def perform_coloring(sub_graphs, clusters_per_node_per_graph, clustering, output
     # Extract colors from gvmap output and update partition graphs
     color.add_colors_to_partition_graphs(gvmap_dot_file, sub_graphs, clusters_per_node_per_graph)
     
-def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, edge_size, width, height, mode):
+def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, edge_size, label_size, width, height, mode):
     output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
     out = os.path.join(output, 'frames_partition/p{}_'.format(p))
     if mode == 'dot':
@@ -266,7 +272,7 @@ def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, e
     else:
         logging.info("Generating graph images (%s) for DGS file %s", out, dgs_file)
     args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs_file, '-out', out, '-layout', layout, '-seed', str(seed), 
-                    '-node_size', str(node_size), '-edge_size', str(edge_size), 
+                    '-node_size', str(node_size), '-edge_size', str(edge_size), '-label_size', str(label_size),
                     '-width', str(width), '-height', str(height), 
                     '-mode', mode, '-dotfile', output_dot_filepath]
     if force:
