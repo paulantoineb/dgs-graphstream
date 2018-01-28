@@ -26,65 +26,65 @@ def parse_arguments():
     # Required arguments
     required_group = parser.add_argument_group('required arguments')
     required_group.add_argument('graph',
-                        help='Input graph file')
-    required_group.add_argument('-f', '--format', choices=['metis', 'dot'], required=True, # TODO replace with exclusive group -metis -edgelist?
-                        help='Format of the input graph file')
+                        help='input graph file')
+    required_group.add_argument('-f', '--format', choices=['metis', 'edgelist'], required=True,
+                        help='format of the input graph file')
     required_group.add_argument('-o', '--output_dir', required=True,
-                        help='Output directory')  
+                        help='output directory')  
     # Input/output files
     io_group = parser.add_argument_group('input/outputs options')
     
     io_group.add_argument('-a', '--assignments',
-                        help='Partition assignments list')
+                        help='partition assignments list')
     order_group = io_group.add_mutually_exclusive_group()
     order_group.add_argument('-n', '--order',
-                        help='Node order list')
+                        help='node order list')
     order_group.add_argument('--order-seed',
-                        help='Random seed for ordering nodes')        
+                        help='seed for ordering nodes')        
     # Clustering
     clustering_group = parser.add_argument_group('clustering options')
     clustering_group.add_argument('--clustering', '-c', choices=['oslom2','infomap','graphviz'], default='oslom2',
-                        help='Clustering method')
+                        help='clustering method')
     clustering_group.add_argument('--cluster-seed', type=int, metavar='S',
-                        help='Seed for clustering')
+                        help='seed for clustering')
     # Layout
     layout_group = parser.add_argument_group('layout options')
     layout_group.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
-                        help='Graph layout')   
+                        help='graph layout')   
     layout_group.add_argument('--layout-seed', type=int, default=utils.get_random_seed(), metavar='S',
-                        help='Seed for graph layout')
+                        help='seed for graph layout')
     layout_group.add_argument('--force', type=float, metavar='F',
-                        help='Force for linlog graph layout (default=3.0)')
+                        help='force for linlog graph layout (default=3.0)')
     layout_group.add_argument('--attraction', type=float, metavar='A',
-                        help='Attraction factor for linlog graph layout (default=0)')
+                        help='attraction factor for linlog graph layout (default=0)')
     layout_group.add_argument('--repulsion', type=float, metavar='R',
-                        help='Repulsion factor for linlog graph layout (default=-1.2)')
+                        help='repulsion factor for linlog graph layout (default=-1.2)')
     # Coloring
     coloring_group = parser.add_argument_group('coloring options')
     coloring_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
-                        help='Seed for coloring with gvmap')
+                        help='seed for coloring with gvmap')
     # Image style
     styling_group = parser.add_argument_group('image options')
     styling_group.add_argument('--node-size', type=int, default=10, metavar='S',
-                        help='Node size in pixels')
+                        help='node size in pixels')
     styling_group.add_argument('--edge-size', type=int, default=1, metavar='T',
-                        help='Edge size in pixels')
+                        help='edge size in pixels')
     styling_group.add_argument('--border-size', type=int, default=1, metavar='T',
-                        help='Border size between tiles')
+                        help='border size between tiles')
     styling_group.add_argument('--width', type=int, default=1280, metavar='W',
-                        help='Image width')
+                        help='image width')
     styling_group.add_argument('--height', type=int, default=720, metavar='H',
-                        help='Image height')
+                        help='image height')
     # Video
     video_group = parser.add_argument_group('video options')
     video_group.add_argument('--video',
-                    help='Output video file with tiled frames')
+                        help='output video file with tiled frames')
     video_group.add_argument('--fps', type=int,
-                        help='Frames per second (default=4)')
+                        help='frames per second (default=4)')
     # Pdf
     pdf_group = parser.add_argument_group('pdf options')
     pdf_group.add_argument('--pdf-frequency', type=int, default=1, metavar='F', # TODO
-                        help='PDF generation frequency (every F steps)')
+                        help='pdf generation frequency (every F steps)')
 
     return parser.parse_args()
     

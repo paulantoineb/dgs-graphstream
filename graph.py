@@ -52,7 +52,8 @@ def offset_graphs_to_avoid_overlaps(graphs, spacing):
             node_positions[node[0]] = ','.join([str(get_x(node) + offset), str(get_y(node))])
         add_node_attribute_to_graph(graph, '"pos"', node_positions)
         # increment offset value to offset next graph by 10
-        offset += max(x_values) - min(x_values) + spacing
+        if x_values:
+            offset += max(x_values) - min(x_values) + spacing
         
 def merge_graphs(graphs, output_dot_filepath):
     logging.info("Merging %d graphs together and exporting dot file %s", len(graphs), output_dot_filepath)

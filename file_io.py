@@ -86,16 +86,17 @@ def read_metis(file):
 
     return G
     
-def read_dot(file):
-    logging.info("Reading Graphviz dot file %s", file)
-    return nx.nx_agraph.read_dot(file)
+def read_edgelist(file):
+    logging.info("Reading edgelist file %s", file)
+    return nx.read_edgelist(file)
     
 def read_graph_from_file(file, format):
     graph = None
     if format == 'metis':
         graph = read_metis(file)
-    elif format == 'dot':
-        graph = read_dot(file)        
+    elif format == 'edgelist':
+        graph = read_edgelist(file)  
+        graph = nx.relabel_nodes(graph, {node:utils.to_int(node) for node in graph.nodes()})# relabel nodes as integers
     return graph
 
 def read_assignments_file(file):
@@ -143,7 +144,17 @@ def read_infomap_tree_file(filepath, level):
             line = next(file, None)
 
     return node_dict 
-
+    
+def filter_node_order(node_order, graph):
+    filtered_node_order = []
+    for node in graph.nodes():
+        node_order_index = node - 1 # node x is at index x - 1 in the node_order list
+        if node_order_index >=0 and node_order_index < len(node_order):
+            filtered_node_order.append(node_order[node_order_index])
+        else:
+            filtered_node_order.append(-1) # node not found in node_order list
+    return filtered_node_order
+    
 def write_dgs_file(output, partition, graph, node_order, colour_attr):
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
@@ -153,7 +164,7 @@ def write_dgs_file(output, partition, graph, node_order, colour_attr):
         outf.write("partition_{} 0 0\n".format(partition))
 
         # sort nodes according to node_order
-        filtered_node_order = [node_order[node - 1] for node in graph.nodes()] # node x is at index x - 1 in the node_order list
+        filtered_node_order = filter_node_order(node_order, graph)
         sorted_nodes = [node for _,node in sorted(zip(filtered_node_order, graph.nodes(data=True)))]
         
         i = 0
@@ -194,7 +205,8 @@ def write_oslom_edge_file(output_path, data_filename, G):
     edges_oslom_filename = os.path.join(output_path, 'oslom', data_filename + "-edges-oslom.txt")
     with open(edges_oslom_filename, "w") as outf:
         for e in G.edges(data=True):
-            outf.write("{}\t{}\t{}\n".format(e[0], e[1], e[2]["weight"]))
+            edge_weight = e[2]["weight"] if 'weight' in e[2] else 1.0
+            outf.write("{}\t{}\t{}\n".format(e[0], e[1], edge_weight))
 
     return edges_oslom_filename
     
