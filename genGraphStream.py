@@ -47,6 +47,8 @@ def parse_arguments():
                         help='clustering method')
     clustering_group.add_argument('--cluster-seed', type=int, metavar='S',
                         help='seed for clustering')
+    clustering_group.add_argument('--infomap-calls', type=int, metavar='C',
+                        help='number of times infomap is called within oslom2. Good values are between 1 and 10 (default=0)')
     # Layout
     layout_group = parser.add_argument_group('layout options')
     layout_group.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
@@ -90,8 +92,12 @@ def parse_arguments():
     
 def validate_arguments(args):
     errors = []
+    # Clustering
     if args.clustering == 'graphviz' and args.cluster_seed:
         errors.append("The --cluster-seed option is not available with the graphviz clustering method")
+    if args.clustering != 'oslom2' and args.infomap_calls:
+        errors.append("The --infomap-calls option is only available with the oslom2 clustering method")
+    # Layout
     if args.layout != 'linlog' and args.force:
         errors.append("The --force option is only available with the linlog layout")
     if args.layout != 'linlog' and args.attraction:
@@ -111,6 +117,8 @@ def validate_arguments(args):
         args.fps = 4
     if not args.cluster_seed:
         args.cluster_seed = utils.get_random_seed()
+    if not args.infomap_calls:
+        args.infomap_calls = 0
     
 def run(args):
     # Clean output directory
@@ -131,7 +139,7 @@ def run(args):
     generate_layouts(sub_graphs, args.output_dir, node_order, args.layout, args.layout_seed, args.force, args.attraction, args.repulsion, args.node_size, args.edge_size, args.width, args.height)
      
     # Perform clustering of each sub-graph
-    clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering, args.cluster_seed)
+    clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering, args.cluster_seed, args.infomap_calls)
         
     # Perform coloring
     perform_coloring(sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, args.color_seed)
@@ -199,21 +207,21 @@ def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, at
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True) 
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
     
-def perform_clustering(sub_graphs, output_dir, clustering, cluster_seed):
+def perform_clustering(sub_graphs, output_dir, clustering, cluster_seed, infomap_calls):
     clusters_per_node_per_graph = []
     for index, sub_graph in enumerate(sub_graphs):
         logging.info("Performing clustering (%s) on sub-graph %d", clustering, index)
-        clusters_per_node = run_clustering(output_dir, clustering, sub_graph, cluster_seed)
+        clusters_per_node = run_clustering(output_dir, clustering, sub_graph, cluster_seed, infomap_calls)
         if clustering != 'graphviz': # clustering done directly by graphviz
             cluster.create_cluster_for_homeless_nodes(sub_graph, clusters_per_node) # add homeless nodes cluster
         clusters_per_node_per_graph.append(clusters_per_node)
     return clusters_per_node_per_graph
     
-def run_clustering(output, clustering_method, graph, cluster_seed):
+def run_clustering(output, clustering_method, graph, cluster_seed, infomap_calls):
     clusters_per_node = {}
     if clustering_method == 'oslom2':
         oslom_edge_file = file_io.write_oslom_edge_file(output, "oslom_edge_file", graph)                                                
-        cluster.run_oslom2(output, oslom_edge_file, cluster_seed)
+        cluster.run_oslom2(output, oslom_edge_file, cluster_seed, infomap_calls)
         output_tp_file = os.path.join(oslom_edge_file + "_oslo_files", "tp") # or tp1 or tp2 (to be exposed as parameter)
         clusters_per_node = file_io.read_oslom2_tp_file(output_tp_file)
     elif clustering_method == 'infomap':

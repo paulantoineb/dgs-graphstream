@@ -195,7 +195,7 @@ def write_dgs_file(output, partition, graph, node_order, colour_attr):
             
     return filename
     
-def write_oslom_edge_file(output_path, data_filename, G):
+def write_oslom_edge_file(output_path, data_filename, graph):
     if not os.path.exists(output_path):
         os.makedirs(output_path)
     if not os.path.exists(os.path.join(output_path, 'oslom')):
@@ -204,13 +204,13 @@ def write_oslom_edge_file(output_path, data_filename, G):
     # write edge list in a format for OSLOM, tab delimited
     edges_oslom_filename = os.path.join(output_path, 'oslom', data_filename + "-edges-oslom.txt")
     with open(edges_oslom_filename, "w") as outf:
-        for e in G.edges(data=True):
+        for e in graph.edges(data=True):
             edge_weight = e[2]["weight"] if 'weight' in e[2] else 1.0
             outf.write("{}\t{}\t{}\n".format(e[0], e[1], edge_weight))
 
     return edges_oslom_filename
     
-def write_pajek_file(output_path, data_filename, G):
+def write_pajek_file(output_path, data_filename, graph):
     pajek_filepath = os.path.join(output_path, data_filename + ".net")
-    nx.write_pajek(G, pajek_filepath)
+    nx.write_pajek(graph, pajek_filepath)
     return pajek_filepath

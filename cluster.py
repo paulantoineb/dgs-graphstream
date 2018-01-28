@@ -51,7 +51,7 @@ def do_local_to_global_cluster_conversion(clusters_per_node_per_graph):
         
     return local_to_global_cluster_mapping
     
-def run_oslom2(output_directory, edges_oslom_filename, cluster_seed):
+def run_oslom2(output_directory, edges_oslom_filename, cluster_seed, infomap_calls):
     """
     Use OSLOM to find clusters in graph
     http://www.oslom.org/
@@ -64,7 +64,7 @@ def run_oslom2(output_directory, edges_oslom_filename, cluster_seed):
 
     r = 10
     hr = 50
-    args = [oslom_bin, "-f", edges_oslom_filename, "-w", "-r", str(r), "-hr", str(hr), "-seed", str(cluster_seed)] # "-infomap", "5"
+    args = [oslom_bin, "-f", edges_oslom_filename, "-w", "-r", str(r), "-hr", str(hr), "-seed", str(cluster_seed), '-infomap', str(infomap_calls)]
     logging.debug("oslom2 command: %s", ' '.join(args))
     with open(oslom_log, "w") as logwriter:
         retval = subprocess.call(args, stdout=logwriter, stderr=subprocess.STDOUT)
