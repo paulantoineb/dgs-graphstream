@@ -10,6 +10,12 @@ def to_int(value):
         return int(value)
     except:
         return value
+        
+def to_str(value):
+    try:
+        return str(value)
+    except:
+        return value
 
 def merge_dictionaries(dictionaries):
     merged_dict = {}

@@ -51,7 +51,7 @@ def do_local_to_global_cluster_conversion(clusters_per_node_per_graph):
         
     return local_to_global_cluster_mapping
     
-def run_oslom2(output_directory, edges_oslom_filename, cluster_seed, infomap_calls):
+def run_oslom2(output_directory, edges_oslom_filename, oslom2_dir, cluster_seed, infomap_calls):
     """
     Use OSLOM to find clusters in graph
     http://www.oslom.org/
@@ -59,7 +59,7 @@ def run_oslom2(output_directory, edges_oslom_filename, cluster_seed, infomap_cal
     """
 
     temp_dir = tempfile.mkdtemp()
-    oslom_bin = os.path.join("/home/paulantoineb/src/OSLOM2", "oslom_undir")
+    oslom_bin = os.path.join(oslom2_dir, "oslom_undir")
     oslom_log = os.path.join(output_directory, "oslom.log")
 
     r = 10
@@ -69,8 +69,8 @@ def run_oslom2(output_directory, edges_oslom_filename, cluster_seed, infomap_cal
     with open(oslom_log, "w") as logwriter:
         retval = subprocess.call(args, stdout=logwriter, stderr=subprocess.STDOUT)
         
-def run_infomap(output_directory, pajek_file, cluster_seed):
-    infomap_bin = os.path.join("/home/paulantoineb/src/infomap", "Infomap")
+def run_infomap(output_directory, pajek_file, infomap_dir, cluster_seed):
+    infomap_bin = os.path.join(infomap_dir, "Infomap")
     num_trials = 1
     args = [infomap_bin, pajek_file, output_directory, '--seed', str(cluster_seed), ' --num-trials', str(num_trials), '--overlapping']
     logging.debug("infomap command: %s", ' '.join(args))

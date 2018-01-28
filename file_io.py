@@ -136,7 +136,7 @@ def read_infomap_tree_file(filepath, level):
                 module_id = ''.join(values[0].split(":")[0:level]) # concatenated module id at given level (1 to 3). 2:4:3 becomes 2 at level 1, 24 at level 2 and 243 at level 3
                 if not module_id in module_ids:
                     module_ids.append(module_id)
-                node_id = values[2].strip('"') # node id without quotes
+                node_id = utils.to_int(values[2].strip('"')) # node id without quotes
                 one_based_module_id = module_ids.index(module_id) + 1 # current 1-based (needed by gvmap) module id
                 if not one_based_module_id in node_dict[node_id]:
                     node_dict[node_id].append(one_based_module_id) # add current module id to node dictionary
@@ -212,5 +212,9 @@ def write_oslom_edge_file(output_path, data_filename, graph):
     
 def write_pajek_file(output_path, data_filename, graph):
     pajek_filepath = os.path.join(output_path, data_filename + ".net")
+    # write_pajek requires string attributes
+    weights = nx.get_node_attributes(graph, 'weight')
+    new_weights = {k:utils.to_str(v) for k,v in weights.items()}
+    nx.set_node_attributes(graph, name='weight', values=new_weights)
     nx.write_pajek(graph, pajek_filepath)
     return pajek_filepath

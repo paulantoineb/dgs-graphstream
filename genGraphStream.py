@@ -5,6 +5,7 @@ import sys
 import glob
 import logging
 import argparse
+import configparser
 import subprocess
 import random
 import networkx as nx
@@ -121,8 +122,30 @@ def validate_arguments(args):
         args.cluster_seed = utils.get_random_seed()
     if not args.infomap_calls:
         args.infomap_calls = 0
+        
+def parse_config_file(config_file):
+    logging.debug("Reading the config file %s", config_file)
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    return config
     
-def run(args):
+def validate_install_dir(config_name, executable, errors):
+    tool_bin = os.path.join(config['install_dirs'][config_name], executable)
+    if not os.path.isfile(tool_bin):
+        errors.append("The {} executable cannot be found in the directory {}. Please update the config file with the correct path.".format(config_name, config['install_dirs'][config_name]))
+    
+def validate_config(config):
+    errors = []
+    validate_install_dir('gvmap', 'gvmap', errors)
+    validate_install_dir('oslom2', 'oslom_undir', errors)
+    validate_install_dir('infomap', 'Infomap', errors)
+    
+    if errors:
+        for error in errors:
+            logging.error(error)
+        sys.exit(1)
+    
+def run(args, config):
     # Clean output directory
     utils.create_or_clean_output_dir(args.output_dir)
 
@@ -143,10 +166,12 @@ def run(args):
                      args.node_size, args.edge_size, args.label_size, args.width, args.height)
      
     # Perform clustering of each sub-graph
-    clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering, args.cluster_seed, args.infomap_calls)
+    clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering, 
+                                                     config['install_dirs']['oslom2'], config['install_dirs']['infomap'], 
+                                                     args.cluster_seed, args.infomap_calls)
         
     # Perform coloring
-    perform_coloring(sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, args.color_seed)
+    perform_coloring(sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, config['install_dirs']['gvmap'], args.color_seed)
     
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):       
@@ -213,32 +238,32 @@ def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, at
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True) 
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
     
-def perform_clustering(sub_graphs, output_dir, clustering, cluster_seed, infomap_calls):
+def perform_clustering(sub_graphs, output_dir, clustering, oslom2_dir, infomap_dir, cluster_seed, infomap_calls):
     clusters_per_node_per_graph = []
     for index, sub_graph in enumerate(sub_graphs):
         logging.info("Performing clustering (%s) on sub-graph %d", clustering, index)
-        clusters_per_node = run_clustering(output_dir, clustering, sub_graph, cluster_seed, infomap_calls)
+        clusters_per_node = run_clustering(output_dir, clustering, sub_graph, oslom2_dir, infomap_dir, cluster_seed, infomap_calls)
         if clustering != 'graphviz': # clustering done directly by graphviz
             cluster.create_cluster_for_homeless_nodes(sub_graph, clusters_per_node) # add homeless nodes cluster
         clusters_per_node_per_graph.append(clusters_per_node)
     return clusters_per_node_per_graph
     
-def run_clustering(output, clustering_method, graph, cluster_seed, infomap_calls):
+def run_clustering(output, clustering_method, graph, oslom2_dir, infomap_dir, cluster_seed, infomap_calls):
     clusters_per_node = {}
     if clustering_method == 'oslom2':
         oslom_edge_file = file_io.write_oslom_edge_file(output, "oslom_edge_file", graph)                                                
-        cluster.run_oslom2(output, oslom_edge_file, cluster_seed, infomap_calls)
+        cluster.run_oslom2(output, oslom_edge_file, oslom2_dir, cluster_seed, infomap_calls)
         output_tp_file = os.path.join(oslom_edge_file + "_oslo_files", "tp") # or tp1 or tp2 (to be exposed as parameter)
         clusters_per_node = file_io.read_oslom2_tp_file(output_tp_file)
     elif clustering_method == 'infomap':
         pajek_file = file_io.write_pajek_file(output, "pajek_file", graph)
-        cluster.run_infomap(output, pajek_file, cluster_seed)
+        cluster.run_infomap(output, pajek_file, infomap_dir, cluster_seed)
         output_tree_file = os.path.splitext(pajek_file)[0]+'.tree'
-        level = 1 # to be exposed as parameter
+        level = 1 # lowest hierarchy level
         clusters_per_node = file_io.read_infomap_tree_file(output_tree_file, level) # get cluster(s) from Infomap .tree file
     return clusters_per_node
     
-def perform_coloring(sub_graphs, clusters_per_node_per_graph, clustering, output_dir, color_seed):
+def perform_coloring(sub_graphs, clusters_per_node_per_graph, clustering, output_dir, gvmap_dir, color_seed):
     if clustering != 'graphviz':
         # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
         cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
@@ -259,7 +284,7 @@ def perform_coloring(sub_graphs, clusters_per_node_per_graph, clustering, output
     graph.merge_graphs(sub_graphs, merged_graph_dot_filepath)
     
     # Color nodes with gvmap
-    gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath)
+    gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath, gvmap_dir)
     
     # Extract colors from gvmap output and update partition graphs
     color.add_colors_to_partition_graphs(gvmap_dot_file, sub_graphs, clusters_per_node_per_graph)
@@ -345,8 +370,12 @@ if __name__ == '__main__':
     # Parse arguments
     args = parse_arguments()
     validate_arguments(args)   
+    
+    # Parse config file
+    config = parse_config_file('config.ini')
+    validate_config(config)  
 
     # Run dgs-graphstream
-    run(args)
+    run(args, config)
 
     logging.info("Done")

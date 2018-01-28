@@ -28,10 +28,11 @@ def get_colors_per_node(color_per_node, clusters_per_node):
         colors_per_node[node] = ','.join([c.strip('"') for c in colors])
     return colors_per_node
     
-def color_nodes_with_gvmap(output_dir, seed, dot_filepath):
+def color_nodes_with_gvmap(output_dir, seed, dot_filepath, gvmap_dir):
     output_dot_filename = os.path.join(output_dir, 'gvmap.dot') 
     logging.info("Coloring graph %s using gvmap and writing dot file %s", dot_filepath, output_dot_filename)
-    args = ['gvmap', '-e', '-w', '-d', str(seed), dot_filepath] # "-w option is only available with this graphviz fork https://gitlab.com/paulantoineb/graphviz
+    gvmap_bin = os.path.join(gvmap_dir, "gvmap")
+    args = [gvmap_bin, '-e', '-w', '-d', str(seed), dot_filepath] # "-w option is only available with this graphviz fork https://gitlab.com/paulantoineb/graphviz
     logging.debug("gvmap command: %s", ' '.join(args))
     output_file = open(output_dot_filename, "w")
     retval = subprocess.call(
