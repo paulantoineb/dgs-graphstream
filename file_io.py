@@ -145,7 +145,8 @@ def read_infomap_tree_file(filepath, level):
 
     return node_dict 
     
-def filter_node_order(node_order, graph):
+def filter_node_order_on_graph(node_order, graph):
+    ''' Filter node order list for nodes in graph '''
     filtered_node_order = []
     for node in graph.nodes():
         node_order_index = node - 1 # node x is at index x - 1 in the node_order list
@@ -155,16 +156,16 @@ def filter_node_order(node_order, graph):
             filtered_node_order.append(-1) # node not found in node_order list
     return filtered_node_order
     
-def write_dgs_file(output, partition, graph, node_order, label_type, colour_attr):
+def write_dgs_file(output, partition, graph, node_order, assignments, label_type, colour_attr):
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
     
     with open(filename, 'w') as outf:
         outf.write("DGS004\n")
         outf.write("partition_{} 0 0\n".format(partition))
-
+        
         # sort nodes according to node_order
-        filtered_node_order = filter_node_order(node_order, graph)
+        filtered_node_order = filter_node_order_on_graph(node_order, graph)
         sorted_nodes = [node for _,node in sorted(zip(filtered_node_order, graph.nodes(data=True)))]
         
         i = 0

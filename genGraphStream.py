@@ -70,19 +70,19 @@ def parse_arguments():
     # Image style
     styling_group = parser.add_argument_group('image options')
     styling_group.add_argument('--node-size', type=int, default=10, metavar='S',
-                        help='node size in pixels')
+                        help='node size in pixels (default=10)')
     styling_group.add_argument('--edge-size', type=int, default=1, metavar='S',
-                        help='edge size in pixels')
+                        help='edge size in pixels (default=1)')
     styling_group.add_argument('--label-size', type=int, default=10, metavar='S',
-                        help='label size in points')
+                        help='label size in points (default=10)')
     styling_group.add_argument('--label-type', choices=['id', 'order'], default='id', metavar='T', 
                         help='type of node labels (node id or node order)')
     styling_group.add_argument('--border-size', type=int, default=1, metavar='S',
-                        help='border size between tiles')
+                        help='border size between tiles (default=1)')
     styling_group.add_argument('--width', type=int, default=1280, metavar='W',
-                        help='image width')
+                        help='image width (default=1280)')
     styling_group.add_argument('--height', type=int, default=720, metavar='H',
-                        help='image height')
+                        help='image height (default=720)')
     # Video
     video_group = parser.add_argument_group('video options')
     video_group.add_argument('--video',
@@ -159,12 +159,13 @@ def run(args, config):
     # Read assignments and node order files
     assignments = get_assignments(args.assignments, input_graph)
     node_order = get_node_order(args.order, args.order_seed, input_graph)
+    filtered_node_order = filter_node_order_on_assignments(node_order, assignments)
       
     # Split graph into sub-graphs (one per partition)
     sub_graphs = split_graph(input_graph, assignments)
     
     # Generate layout of each sub-graph
-    generate_layouts(sub_graphs, args.output_dir, node_order, args.layout, args.layout_seed, 
+    generate_layouts(sub_graphs, args.output_dir, filtered_node_order, assignments, args.layout, args.layout_seed, 
                      args.force, args.attraction, args.repulsion, 
                      args.node_size, args.edge_size, args.label_size, args.label_type, args.width, args.height)
      
@@ -178,14 +179,14 @@ def run(args, config):
     
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):       
-        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, node_order, args.label_type, 'fillcolor')    
+        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, filtered_node_order, assignments, args.label_type, 'fillcolor')    
         generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed, 
                         args.force, args.attraction, args.repulsion,
                         args.node_size, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
       
     # Combine frames into tiles
     if args.video or args.pdf:
-        frame_files = combine_images_into_tiles(args.output_dir, assignments, len(sub_graphs), args.border_size)
+        frame_files = combine_images_into_tiles(args.output_dir, assignments, filtered_node_order, len(sub_graphs), args.border_size)
      
     # Convert frames to video 
     if args.video:
@@ -221,6 +222,19 @@ def get_node_order(order_file, order_seed, graph):
         random.shuffle(node_order)
     return node_order
     
+def filter_node_order_on_assignments(node_order, assignments):
+    ''' Return global node order with excluded nodes marked as -1 ''' 
+    sorted_node_indexes = sorted(range(len(node_order)), key=lambda k: node_order[k]) # sorted node indexes
+    current_node_order = 1 # node order starts at 1
+    filtered_node_order= [-1] * len(node_order)
+    for node_index in sorted_node_indexes:
+        if assignments[node_index] != -1:
+            filtered_node_order[node_index] = current_node_order # mark valid node with its order
+            current_node_order +=1
+        else:
+            filtered_node_order[node_index] = -1 # mark excluded node (assignment = -1) as -1
+    return filtered_node_order
+    
 def split_graph(input_graph, assignments):
     partitions = get_partitions(assignments) # Getting partitions from the assignments
     log_partitions_info(partitions, assignments)
@@ -241,9 +255,9 @@ def log_partitions_info(partitions, assignments):
         logging.info("[Partition %d contains %d nodes]", partition, len([p for p in assignments if p == partition]))
     logging.info("[Number of nodes excluded: %d]", len([p for p in assignments if p == -1]))
     
-def generate_layouts(sub_graphs, output_dir, node_order, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, label_type, width, height):
+def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, label_type, width, height):
     for index, sub_graph in enumerate(sub_graphs):       
-        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, label_type, None)            
+        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, assignments, label_type, None)            
         dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True) 
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
@@ -325,7 +339,7 @@ def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, e
             stderr=subprocess.STDOUT)
     return output_dot_filepath    
 
-def combine_images_into_tiles(output, assignments, partitions_num, border_size):
+def combine_images_into_tiles(output, assignments, node_order, partitions_num, border_size):
     logging.info("Combining images into tiles")
     frames = {}
     frames_max = 0
@@ -339,13 +353,16 @@ def combine_images_into_tiles(output, assignments, partitions_num, border_size):
     path_joined = os.path.join(output, 'frames_joined')
     if not os.path.exists(path_joined):
         os.makedirs(path_joined)
+        
+    # sort assignments according to node_order
+    sorted_assignments = [a for _,a in sorted(zip(node_order, assignments))]
 
     pframe = [-1] * partitions_num
     tiles = ['frame_blank.png'] * partitions_num
 
     frame_files = []
     f = 0
-    for a in assignments:
+    for a in sorted_assignments:
         if a == -1: # XXX remove > 3
             continue
 
