@@ -90,7 +90,6 @@ The output directory should now contain the following files:
 * `frames_joined/` - the frames from the folder above are joined to produce a single video frame. The video frame is stepped by node placement from the assignments file.
 * `pdf/` - the same video frames as above but as pdfs
 * `vid.mp4` - the video frames animated into an MP4 for playback
-```
 
 ## Using the Java GraphStream renderer manually
 
@@ -148,7 +147,7 @@ ffmpeg -framerate 4 -i output/frames_joined/frame_%6d.png -pix_fmt yuv420p -r 10
 
 ## Authors
 
-Sami Barakat (<sami@sbarakat.co.uk>)
-Paul-Antoine Bittner
+* Sami Barakat (<sami@sbarakat.co.uk>)
+* Paul-Antoine Bittner
 
 Licensed under the MIT license. See the [LICENSE](https://github.com/sbarakat/dgs-graphstream/blob/master/LICENSE) file for further details.
