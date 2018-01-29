@@ -58,4 +58,4 @@ def offset_graphs_to_avoid_overlaps(graphs, spacing):
 def merge_graphs(graphs, output_dot_filepath):
     logging.info("Merging %d graphs together and exporting dot file %s", len(graphs), output_dot_filepath)
     merged_graph = nx.union_all(graphs)
-    nx.nx_agraph.write_dot(merged_graph, output_dot_filepath)
+    nx.drawing.nx_pydot.write_dot(merged_graph, output_dot_filepath)
