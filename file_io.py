@@ -9,7 +9,7 @@ import utils
 
 def read_metis(file):
     logging.info("Reading METIS file %s", file)
-    
+
     G = nx.Graph()
 
     # add node weights from METIS file
@@ -85,30 +85,30 @@ def read_metis(file):
     assert (m_edges == G.number_of_edges()), "Expected {} edges, networkx graph contains {} edges".format(m_edges, G.number_of_edges())
 
     return G
-    
+
 def read_edgelist(file):
     logging.info("Reading edgelist file %s", file)
     return nx.read_edgelist(file)
-    
+
 def read_graph_from_file(file, format):
     graph = None
     if format == 'metis':
         graph = read_metis(file)
     elif format == 'edgelist':
-        graph = read_edgelist(file)  
+        graph = read_edgelist(file)
         graph = nx.relabel_nodes(graph, {node:utils.to_int(node) for node in graph.nodes()})# relabel nodes as integers
     return graph
 
 def read_assignments_file(file):
     logging.info("Reading assignments file %s", file)
     with open(file, 'r') as f:
-        return [int(l.strip()) for l in f.readlines()]     
+        return [int(l.strip()) for l in f.readlines()]
 
 def read_order_file(file):
     logging.info("Reading order file %s", file)
     with open(file, 'r') as f:
-        return [int(l.strip()) for l in f.readlines()]               
-    
+        return [int(l.strip()) for l in f.readlines()]
+
 def read_oslom2_tp_file(filepath):
     node_dict = defaultdict(list) # initialize modules per node dictionary
     with open(filepath, 'r') as file:
@@ -120,11 +120,11 @@ def read_oslom2_tp_file(filepath):
                 nodes = line.split()
                 for node_id in nodes:
                     node_dict[utils.to_int(node_id)].append(module_id) # add current module to node dictionary
-                    
+
             line = next(file, None)
-    
-    return node_dict   
-    
+
+    return node_dict
+
 def read_infomap_tree_file(filepath, level):
     node_dict = defaultdict(list) # initialize modules per node dictionary
     module_ids = []
@@ -140,11 +140,11 @@ def read_infomap_tree_file(filepath, level):
                 one_based_module_id = module_ids.index(module_id) + 1 # current 1-based (needed by gvmap) module id
                 if not one_based_module_id in node_dict[node_id]:
                     node_dict[node_id].append(one_based_module_id) # add current module id to node dictionary
-                    
+
             line = next(file, None)
 
-    return node_dict 
-    
+    return node_dict
+
 def filter_node_order_on_graph(node_order, graph):
     ''' Filter node order list for nodes in graph '''
     filtered_node_order = []
@@ -155,19 +155,19 @@ def filter_node_order_on_graph(node_order, graph):
         else:
             filtered_node_order.append(-1) # node not found in node_order list
     return filtered_node_order
-    
+
 def write_dgs_file(output, partition, graph, node_order, assignments, label_type, colour_attr):
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
-    
+
     with open(filename, 'w') as outf:
         outf.write("DGS004\n")
         outf.write("partition_{} 0 0\n".format(partition))
-        
+
         # sort nodes according to node_order
         filtered_node_order = filter_node_order_on_graph(node_order, graph)
         sorted_nodes = [node for _,node in sorted(zip(filtered_node_order, graph.nodes(data=True)))]
-        
+
         i = 0
         st = 1
         nodes_added = []
@@ -179,7 +179,7 @@ def write_dgs_file(output, partition, graph, node_order, assignments, label_type
                 colour = n[1][colour_attr] # get color(s) from attributes
             else:
                 colour = 'black'
-            
+
             if label_type == 'id':
                 label = node_id
             else:
@@ -198,9 +198,9 @@ def write_dgs_file(output, partition, graph, node_order, assignments, label_type
 
             outf.write("st {}\n".format(st))
             st += 1
-            
+
     return filename
-    
+
 def write_oslom_edge_file(output_path, data_filename, graph):
     if not os.path.exists(output_path):
         os.makedirs(output_path)
@@ -215,7 +215,7 @@ def write_oslom_edge_file(output_path, data_filename, graph):
             outf.write("{}\t{}\t{}\n".format(e[0], e[1], edge_weight))
 
     return edges_oslom_filename
-    
+
 def write_pajek_file(output_path, data_filename, graph):
     pajek_filepath = os.path.join(output_path, data_filename + ".net")
     # write_pajek requires string attributes
