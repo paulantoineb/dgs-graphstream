@@ -8,7 +8,11 @@ import argparse
 import configparser
 import subprocess
 import random
+import math
 import fpdf
+from svglib.svglib import svg2rlg
+from reportlab.graphics import renderPDF
+from svgutils.compose import *
 import networkx as nx
 
 import file_io
@@ -186,7 +190,7 @@ def run(args, config):
       
     # Combine frames into tiles
     if args.video or args.pdf:
-        frame_files = combine_images_into_tiles(args.output_dir, assignments, filtered_node_order, len(sub_graphs), args.border_size)
+        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, assignments, filtered_node_order, len(sub_graphs), args.border_size, args.width, args.height)
      
     # Convert frames to video 
     if args.video:
@@ -194,7 +198,7 @@ def run(args, config):
         
     # Convert frames to pdfs
     if args.pdf:
-        create_pdfs_from_tiles(args.output_dir, frame_files, args.pdf)
+        create_pdfs_from_tiles(args.output_dir, frame_files_svg, args.pdf)
     
 def get_assignments(assignments_file, graph):
     if assignments_file:
@@ -338,8 +342,46 @@ def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, e
             stdout=logwriter,
             stderr=subprocess.STDOUT)
     return output_dot_filepath    
+    
+def create_png_tiles(tiles, border_size, columns, output_png_file):
+    args = ['/usr/bin/montage']
+    args += tiles
+    args += ['-tile', '{}x'.format(columns) , '-geometry', '+0+0', '-border', str(border_size), output_png_file]
+    logging.debug("montage command: %s", ' '.join(args))
+    retval = subprocess.call(
+        args, cwd='.',
+        stderr=subprocess.STDOUT)
+        
+def create_svg_tiles(svg_tiles, output_svg_file, width, height, border_size, columns):
+    rows = math.ceil(len(svg_tiles) / columns) # number of rows
 
-def combine_images_into_tiles(output, assignments, node_order, partitions_num, border_size):
+    # Add tiles
+    svg_objects = []
+    for index, tile in enumerate(svg_tiles):
+        if tile:
+            # 0-based row and column
+            row = math.floor(index / columns)
+            col = index % columns
+            # width and height offsets
+            width_offset = col * width
+            height_offset = row * height
+            # add tile with offsets
+            svg_objects.append(SVG(tile).move(width_offset, height_offset))
+            
+    # Add grid lines
+    total_width = width * columns
+    total_height = height * rows
+    for col in range(0, columns + 1):
+        svg_objects.append(Line([(width * col, 0), (width * col, total_height)], width=border_size, color='silver')) # vertical line
+    for row in range(0, rows + 1):
+        svg_objects.append(Line([(0, height * row), (total_width, height * row)], width=border_size, color='silver')) # horizontal line
+        
+    # Create combined svg file from tiles
+    Figure(total_width, total_height,
+       *svg_objects
+       ).save(output_svg_file)
+       
+def combine_images_into_tiles(output, assignments, node_order, partitions_num, border_size, width, height):
     logging.info("Combining images into tiles")
     frames = {}
     frames_max = 0
@@ -356,11 +398,15 @@ def combine_images_into_tiles(output, assignments, node_order, partitions_num, b
         
     # sort assignments according to node_order
     sorted_assignments = [a for _,a in sorted(zip(node_order, assignments))]
+    
+    # compute number of rows and columns
+    columns = math.ceil(math.sqrt(partitions_num))
 
     pframe = [-1] * partitions_num
     tiles = ['frame_blank.png'] * partitions_num
 
-    frame_files = []
+    frame_files_png = []
+    frame_files_svg = []
     f = 0
     for a in sorted_assignments:
         if a == -1: # XXX remove > 3
@@ -368,25 +414,27 @@ def combine_images_into_tiles(output, assignments, node_order, partitions_num, b
 
         try:
             pframe[a] += 1
-            tiles[a] = frames[a][pframe[a]]
-
-            frame_file = os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))
-            frame_files.append(frame_file)
+            tiles[a] = frames[a][pframe[a]]           
             
-            args = ['/usr/bin/montage']
-            args += tiles
-            args += ['-geometry', '+0+0', '-border', str(border_size), frame_file]
-            logging.debug("montage command: %s", ' '.join(args))
-            retval = subprocess.call(
-                args, cwd='.',
-                stderr=subprocess.STDOUT)
+            # create png tiles
+            png_frame_file = os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))
+            frame_files_png.append(png_frame_file)
+            create_png_tiles(tiles, border_size, columns, png_frame_file)
+                
+            # create svg tiles
+            svg_frame_file = os.path.join(path_joined, 'frame_{0:06d}.svg'.format(f))
+            frame_files_svg.append(svg_frame_file)
+            
+            svg_tiles = [os.path.splitext(tile)[0]+'.svg' for tile in tiles]      
+            svg_tiles = list(map(lambda tile: tile if tile != 'frame_blank.svg' else '', svg_tiles))
+            create_svg_tiles(svg_tiles, svg_frame_file, width, height, border_size, columns)          
 
             f += 1
 
         except IndexError:
             print('Missing frame p{}_{}'.format(a, pframe[a]))
             
-    return frame_files
+    return frame_files_png, frame_files_svg
             
 def create_video_from_tiles(output_directory, video_file, fps):
     logging.info("Creating video %s from tiles", video_file)
@@ -395,21 +443,30 @@ def create_video_from_tiles(output_directory, video_file, fps):
     log_file = os.path.join(output_directory, "ffmpeg.log")
     with open(log_file, "w") as logwriter:
         retval = subprocess.call(args, stdout=logwriter, stderr=subprocess.STDOUT) 
-        
-def create_pdfs_from_tiles(output_dir, frame_files, pdf_percentage):
+       
+def write_png_to_pdf(png_file, output_dir):
+    pdf_file = os.path.join(output_dir, os.path.splitext(os.path.basename(png_file))[0]+'_png.pdf')
+    pdf = fpdf.FPDF('L', 'mm', 'A4')
+    pdf.add_page()
+    pdf.image(png_file, w=277) # 277mm width to center image (default margin = 10mm)
+    pdf.output(pdf_file, "F")
+    
+def write_svg_to_pdf(svg_file, output_dir):
+    pdf_file = os.path.join(output_dir, os.path.splitext(os.path.basename(svg_file))[0]+'.pdf')
+    drawing = svg2rlg(svg_file)
+    renderPDF.drawToFile(drawing, pdf_file)
+       
+def create_pdfs_from_tiles(output_dir, frame_files_svg, pdf_percentage):
     pdf_dir = os.path.join(output_dir, 'pdf')
     if not os.path.exists(pdf_dir):
         os.makedirs(pdf_dir)
     # filter frames to be converted to pdfs
-    step = int(pdf_percentage / 100.0 * len(frame_files))
+    step = int(pdf_percentage / 100.0 * len(frame_files_svg))
     logging.info("Exporting every %d frames (every %d%%) as pdf", step, pdf_percentage)
-    filtered_frame_files = list(reversed(frame_files))[0::step]
+    filtered_frame_files = list(reversed(frame_files_svg))[0::step]
     for frame_file in filtered_frame_files:
-        pdf = fpdf.FPDF('L', 'mm', 'A4')
-        pdf.add_page()
-        pdf.image(frame_file, w=277) # 277mm width to center image (default margin = 10mm)
-        pdf_file = os.path.join(pdf_dir, os.path.splitext(os.path.basename(frame_file))[0]+'.pdf')
-        pdf.output(pdf_file, "F")
+        write_png_to_pdf(os.path.splitext(frame_file)[0]+'.png', pdf_dir) # TEMPORARY (for validation)
+        write_svg_to_pdf(frame_file, pdf_dir)
     
 if __name__ == '__main__':
     # Initialize logging

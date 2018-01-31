@@ -27,6 +27,7 @@ import org.graphstream.ui.layout.springbox.implementations.LinLog;
 import org.graphstream.ui.layout.springbox.implementations.SpringBox;
 import org.graphstream.ui.layout.springbox.BarnesHutLayout ;
 import org.graphstream.ui.view.Viewer;
+import org.graphstream.ui.j2dviewer.J2DGraphRenderer;
 import org.graphstream.ui.graphicGraph.GraphicGraph;
 import org.graphstream.ui.graphicGraph.GraphicNode;
 
@@ -43,6 +44,10 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     private int nodeSize;
     private int edgeSize;
     private int labelSize;
+    private int width;
+    private int height;
+    private String outputDirectory;
+    private Mode mode;
     
     private enum LayoutType {
         LinLog,
@@ -69,6 +74,10 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         this.nodeSize = nodeSize;
         this.edgeSize = edgeSize;
         this.labelSize = labelSize;
+        this.width = width;
+        this.height = height;
+        this.outputDirectory = outputDirectory;
+        this.mode = mode;
         
         layout = CreateLayout(layout_type, seed, force, a, r, theta);
         
@@ -182,6 +191,12 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         return (GraphicGraph)field.get(fsi);
     }
     
+    private J2DGraphRenderer getGraphRenderer(FileSinkImages fsi) throws NoSuchFieldException, IllegalAccessException {
+        Field field = getField(fsi.getClass(), "renderer");
+        field.setAccessible(true);
+        return (J2DGraphRenderer)field.get(fsi);
+    }
+    
     /**
      * Get class field using reflection
      */
@@ -235,6 +250,17 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         }
         e.setAttribute("ui.size", this.edgeSize);
     }
+    
+    public void stepBegins(String sourceId, long timeId, double step) {
+        if (mode == Mode.Images) {
+            try {
+                getGraphRenderer(fsi).screenshot(outputDirectory + String.format("%06d", (int)step - 1) + ".svg", width, height); // output current graph as svg
+            } catch (Exception e1) {
+                e1.printStackTrace();
+                System.exit(1);
+            }
+        }
+	}
     
     public static void main(String[] args) {
         
