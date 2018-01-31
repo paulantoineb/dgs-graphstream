@@ -39,6 +39,15 @@ cd graphviz/
 make
 ```
 
+`gvmap` requires `gts` to be installed. If you see the line *"gts: No (gts library not available)"* when running `./autogen.sh`, you need to install `gts` and then rerun `./autogen.sh`. You will see *"gts: Yes"* when it is installed.
+
+```shell
+# Ubuntu
+sudo apt install libgts-dev
+sudo pkg-config --libs gts
+sudo pkg-config --cflags gts
+```
+
 #### [ImageMagick](https://www.imagemagick.org/script/install-source.php#unix)
 
 The ImageMagick `montage` utility is used to stitch graph images together.
@@ -76,7 +85,7 @@ infomap = /home/paulantoineb/bin/infomap/
 gvmap = /home/paulantoineb/bin/graphviz/cmd/gvmap/
 ```
 
-## Generate Animation
+## Generate an animation
 
 Run the following commands:
 ```shell
@@ -122,28 +131,7 @@ usage: DgsGraphStreamAnimate.jar [OPTIONS]...
 ```
 
 When used in this way, the `./genGraphStream.py` script can be used to create the DGS file, which is then fed into
-the JAR to generate the frames and finally back into `./genGraphStream.py` to join them together. The commands
-below give a full example for generating an animation using the the LinLog layout:
-
-```shell
-# Load the Python virtual environment
-source env/bin/activate
-
-# Generate DGS file from network and assignments
-./genGraphStream.py inputs/network_1.txt inputs/assignments.txt output/ --dgs --num-partitions 4
-
-# Animate the DGS file into frames for each partition
-java -jar "dgs-graphstream/dist/dgs-graphstream.jar" -dgs output/partition_0.dgs -out output/frames_partition/p0_ -layout linlog
-java -jar "dgs-graphstream/dist/dgs-graphstream.jar" -dgs output/partition_1.dgs -out output/frames_partition/p1_ -layout linlog
-java -jar "dgs-graphstream/dist/dgs-graphstream.jar" -dgs output/partition_2.dgs -out output/frames_partition/p2_ -layout linlog
-java -jar "dgs-graphstream/dist/dgs-graphstream.jar" -dgs output/partition_3.dgs -out output/frames_partition/p3_ -layout linlog
-
-# Join each partition tile into a single frame
-./genGraphStream.py inputs/network_1.txt inputs/assignments.txt output/ --join --num-partitions 4
-
-# Convert the frames into a video
-ffmpeg -framerate 4 -i output/frames_joined/frame_%6d.png -pix_fmt yuv420p -r 10 output/animation.mp4
-```
+the JAR to generate the frames and finally back into `./genGraphStream.py` to join them together.
 
 ## Authors
 
