@@ -2,6 +2,8 @@
 
 Create animation of network partition assignments. First processes network file and assignments into DGS file format, then uses GraphStream to animate each frame, finally frames are stitched together.
 
+![screenshot](./samples/4_partitions.svg)
+
 ## Getting started
 
 ### 1. Installing dependencies
