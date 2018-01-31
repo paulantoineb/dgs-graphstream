@@ -42,6 +42,8 @@ def parse_arguments():
     
     io_group.add_argument('-a', '--assignments',
                         help='partition assignments list')
+    io_group.add_argument('--show-partitions', nargs='+', type=int,
+                        help='partitions to be displayed (based on partition values in assignments list)')
     order_group = io_group.add_mutually_exclusive_group()
     order_group.add_argument('-n', '--order',
                         help='node order list')
@@ -102,6 +104,9 @@ def parse_arguments():
     
 def validate_arguments(args):
     errors = []
+    # Partitioning
+    if args.show_partitions and not args.assignments:
+        errors.append("The --show-partitions option is only available when a partition assignments list is provided")
     # Clustering
     if args.clustering == 'graphviz' and args.cluster_seed:
         errors.append("The --cluster-seed option is not available with the graphviz clustering method")
@@ -161,12 +166,14 @@ def run(args, config):
     logging.info("The input graph contains %d nodes and %d edges", nx.number_of_nodes(input_graph), nx.number_of_edges(input_graph))
       
     # Read assignments and node order files
-    assignments = get_assignments(args.assignments, input_graph)
+    assignments = get_assignments(args.assignments, args.show_partitions, input_graph) 
     node_order = get_node_order(args.order, args.order_seed, input_graph)
     filtered_node_order = filter_node_order_on_assignments(node_order, assignments)
+    partitions = get_partitions(assignments) # Getting partitions from the assignments
+    log_partitions_info(partitions, assignments)
       
     # Split graph into sub-graphs (one per partition)
-    sub_graphs = split_graph(input_graph, assignments)
+    sub_graphs = split_graph(input_graph, assignments, partitions)
     
     # Generate layout of each sub-graph
     generate_layouts(sub_graphs, args.output_dir, filtered_node_order, assignments, args.layout, args.layout_seed, 
@@ -190,7 +197,7 @@ def run(args, config):
       
     # Combine frames into tiles
     if args.video or args.pdf:
-        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, assignments, filtered_node_order, len(sub_graphs), args.border_size, args.width, args.height)
+        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, assignments, filtered_node_order, partitions, args.border_size, args.width, args.height)
      
     # Convert frames to video 
     if args.video:
@@ -200,13 +207,18 @@ def run(args, config):
     if args.pdf:
         create_pdfs_from_tiles(args.output_dir, frame_files_svg, args.pdf)
     
-def get_assignments(assignments_file, graph):
+def get_assignments(assignments_file, show_partitions, graph):
     if assignments_file:
         # Extracting assignments from file
         assignments = file_io.read_assignments_file(assignments_file)
         logging.info("%d assignments were found", len(assignments))
         if len(assignments) != nx.number_of_nodes(graph):
             logging.warning("The assignments file doesn't contain the same number of lines than the number of nodes in the graph")
+        # Hide partitions according to show_partitions list
+        if show_partitions:
+            hidden_partitions = list(set(assignments) - set(show_partitions + [-1]))
+            logging.info("Filtering out partitions %s not in show-partitions list %s", hidden_partitions, show_partitions)
+            assignments = [a if a in show_partitions else -1 for a in assignments]
     else:
         # Add all nodes to a single partition
         assignments = [0] * nx.number_of_nodes(graph)
@@ -239,11 +251,8 @@ def filter_node_order_on_assignments(node_order, assignments):
             filtered_node_order[node_index] = -1 # mark excluded node (assignment = -1) as -1
     return filtered_node_order
     
-def split_graph(input_graph, assignments):
-    partitions = get_partitions(assignments) # Getting partitions from the assignments
-    log_partitions_info(partitions, assignments)
-    sub_graphs = graph.create_sub_graphs(input_graph, partitions, assignments)
-    return sub_graphs
+def split_graph(input_graph, assignments, partitions):
+    return graph.create_sub_graphs(input_graph, partitions, assignments)
 
 def get_partitions(assignments):
     unique_assignments = set(assignments)
@@ -251,7 +260,7 @@ def get_partitions(assignments):
         unique_assignments.remove(-1) # remove '-1' (node to be excluded)
     except KeyError:
        pass
-    return unique_assignments
+    return list(unique_assignments)
     
 def log_partitions_info(partitions, assignments):
     logging.info("Found %d partitions in the assignments", len(partitions))
@@ -381,11 +390,12 @@ def create_svg_tiles(svg_tiles, output_svg_file, width, height, border_size, col
        *svg_objects
        ).save(output_svg_file)
        
-def combine_images_into_tiles(output, assignments, node_order, partitions_num, border_size, width, height):
+def combine_images_into_tiles(output, assignments, node_order, partitions, border_size, width, height):
     logging.info("Combining images into tiles")
+    partitions_count = len(partitions)
     frames = {}
     frames_max = 0
-    for p in range(0, partitions_num):
+    for p in range(0, partitions_count):
         path_glob = os.path.join(output, 'frames_partition', 'p{}_*.png'.format(p))
         frames[p] = sorted(glob.glob(path_glob))
         total = len(frames[p])
@@ -400,21 +410,22 @@ def combine_images_into_tiles(output, assignments, node_order, partitions_num, b
     sorted_assignments = [a for _,a in sorted(zip(node_order, assignments))]
     
     # compute number of rows and columns
-    columns = math.ceil(math.sqrt(partitions_num))
+    columns = math.ceil(math.sqrt(partitions_count))
 
-    pframe = [-1] * partitions_num
-    tiles = ['frame_blank.png'] * partitions_num
+    pframe = [-1] * partitions_count
+    tiles = ['frame_blank.png'] * partitions_count
 
     frame_files_png = []
     frame_files_svg = []
     f = 0
     for a in sorted_assignments:
-        if a == -1: # XXX remove > 3
-            continue
-
+        if a == -1:
+            continue # skip excluded nodes (assignment = -1)
+            
+        partition_index = partitions.index(a) # 0-based index
         try:
-            pframe[a] += 1
-            tiles[a] = frames[a][pframe[a]]           
+            pframe[partition_index] += 1
+            tiles[partition_index] = frames[partition_index][pframe[partition_index]]           
             
             # create png tiles
             png_frame_file = os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))
@@ -432,7 +443,7 @@ def combine_images_into_tiles(output, assignments, node_order, partitions_num, b
             f += 1
 
         except IndexError:
-            print('Missing frame p{}_{}'.format(a, pframe[a]))
+            print('Missing frame p{}_{}'.format(partition_index, pframe[partition_index]))
             
     return frame_files_png, frame_files_svg
             
