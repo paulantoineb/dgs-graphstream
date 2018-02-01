@@ -41,6 +41,13 @@ cd graphviz/
 make
 ```
 
+`autoconf` can be installed with the following command if required.
+
+```shell
+# Ubuntu
+sudo apt-get install autoconf
+```
+
 `gvmap` requires `gts` to be installed. If you see the line *"gts: No (gts library not available)"* when running `./autogen.sh`, you need to install `gts` and then rerun `./autogen.sh`. You will see *"gts: Yes"* when it is installed.
 
 ```shell
