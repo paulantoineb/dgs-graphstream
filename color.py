@@ -65,9 +65,7 @@ def get_colors_per_node_global(color_per_node, clusters_per_node_per_graph):
         colors_per_node[utils.to_int(node)] = ','.join([c.strip('"') for c in colors])
     return colors_per_node
 
-def add_colors_to_partition_graphs(merged_graph_dot_filepath, sub_graphs, clusters_per_node_per_graph):
-    color_per_node = graph.get_node_attribute_from_dot_file(merged_graph_dot_filepath, 'fillcolor', True, True)
-    colors_per_node = get_colors_per_node_global(color_per_node, clusters_per_node_per_graph) # combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node
+def add_colors_to_partition_graphs(colors_per_node, sub_graphs):  
     for sub_graph in sub_graphs:
         node_ids = sub_graph.nodes()
         filtered_colors_per_node = { node_id: colors_per_node[node_id] for node_id in node_ids }

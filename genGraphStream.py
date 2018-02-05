@@ -40,7 +40,6 @@ def parse_arguments():
                         help='output directory')
     # Input/output files
     io_group = parser.add_argument_group('input/outputs options')
-
     io_group.add_argument('-a', '--assignments',
                         help='partition assignments list')
     io_group.add_argument('--show-partitions', nargs='+', type=int,
@@ -72,7 +71,10 @@ def parse_arguments():
                         help='repulsion factor for linlog graph layout (default=-1.2)')
     # Coloring
     coloring_group = parser.add_argument_group('coloring options')
-    coloring_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
+    color_mode_group = coloring_group.add_mutually_exclusive_group()
+    color_mode_group.add_argument('--fixed-color', metavar='C',
+                        help='fixed color to use for all nodes')
+    color_mode_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
                         help='seed for coloring with gvmap')
     # Image style
     styling_group = parser.add_argument_group('image options')   
@@ -213,7 +215,7 @@ def run(args, config):
                                                      args.cluster_seed, args.infomap_calls)
 
     # Perform coloring
-    perform_coloring(sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, config['install_dirs']['gvmap'], args.color_seed)
+    perform_coloring(input_graph, sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, config['install_dirs']['gvmap'], args.fixed_color, args.color_seed)
 
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):
@@ -292,20 +294,7 @@ def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_
         size_per_node = {node:min_node_size for node in graph.nodes()}
     else: # fixed
         size_per_node = {node:node_size for node in graph.nodes()}
-    return size_per_node
-
-def count_frames_per_node(assignments, partition):
-    frames_per_node = []
-    frame_count = 0
-    
-    
-    for a in assignments:
-        if a == partition:
-            frames_per_node.append(frame_count)
-            frame_count = 0
-        else:
-            frame_count += 1
-            
+    return size_per_node            
     
 def get_frames_per_node_per_graph(sub_graphs, assignments, partitions):
     filtered_assignments = [a for a in assignments if a != -1]
@@ -378,31 +367,38 @@ def run_clustering(output, clustering_method, graph, graph_id, oslom2_dir, infom
         clusters_per_node = file_io.read_infomap_tree_file(output_tree_file, level) # get cluster(s) from Infomap .tree file
     return clusters_per_node
 
-def perform_coloring(sub_graphs, clusters_per_node_per_graph, clustering, output_dir, gvmap_dir, color_seed):
-    if clustering != 'graphviz':
-        # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
-        cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
-        for index, clusters_per_node in enumerate(clusters_per_node_per_graph):
-            cluster.add_clusters_to_graph(sub_graphs[index], clusters_per_node)
+def perform_coloring(graph, sub_graphs, clusters_per_node_per_graph, clustering, output_dir, gvmap_dir, fixed_color, color_seed):
+    if fixed_color:
+        colors_per_node = {node:fixed_color for node in graph.nodes()}
+    else:
+        if clustering != 'graphviz':
+            # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
+            cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
+            for index, clusters_per_node in enumerate(clusters_per_node_per_graph):
+                cluster.add_clusters_to_graph(sub_graphs[index], clusters_per_node)
 
-    # Add width and height attributes (required by gvmap)
-    for sub_graph in sub_graphs:
-        attributes = {node:0.5 for node in sub_graph.nodes()}
-        graph.add_node_attribute_to_graph(sub_graph, 'height', attributes)
-        graph.add_node_attribute_to_graph(sub_graph, 'width', attributes)
+        # Add width and height attributes (required by gvmap)
+        for sub_graph in sub_graphs:
+            attributes = {node:0.5 for node in sub_graph.nodes()}
+            graph.add_node_attribute_to_graph(sub_graph, 'height', attributes)
+            graph.add_node_attribute_to_graph(sub_graph, 'width', attributes)
 
-    # Offset each subgraph to avoid them overlapping (required by gvmap)
-    graph.offset_graphs_to_avoid_overlaps(sub_graphs, 5000.0)
+        # Offset each subgraph to avoid them overlapping (required by gvmap)
+        graph.offset_graphs_to_avoid_overlaps(sub_graphs, 5000.0)
 
-    # Merge sub-graphs for gvmap
-    merged_graph_dot_filepath = os.path.join(output_dir, 'merged_graph.dot')
-    graph.merge_graphs(sub_graphs, merged_graph_dot_filepath)
+        # Merge sub-graphs for gvmap
+        merged_graph_dot_filepath = os.path.join(output_dir, 'merged_graph.dot')
+        graph.merge_graphs(sub_graphs, merged_graph_dot_filepath)
 
-    # Color nodes with gvmap
-    gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath, gvmap_dir)
+        # Color nodes with gvmap
+        gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath, gvmap_dir)
 
-    # Extract colors from gvmap output and update partition graphs
-    color.add_colors_to_partition_graphs(gvmap_dot_file, sub_graphs, clusters_per_node_per_graph)
+        # Extract colors from gvmap output and update partition graphs
+        color_per_node = graph.get_node_attribute_from_dot_file(merged_graph_dot_filepath, 'fillcolor', True, True)
+        colors_per_node = color.get_colors_per_node_global(color_per_node, clusters_per_node_per_graph) # combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node
+    
+    # add colors to graphs
+    color.add_colors_to_partition_graphs(colors_per_node, sub_graphs)
 
 def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mode, edge_size, label_size, width, height, mode):
     output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
