@@ -15,3 +15,9 @@ node {
 	stroke-color:#FFF8;
     text-alignment: above;
 }
+node.shadow {
+    shadow-mode: gradient-radial; 
+    shadow-width: 50px; 
+    shadow-color: #FFFF00, #FFFFFF; 
+    shadow-offset: 0px;
+}

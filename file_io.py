@@ -155,8 +155,16 @@ def filter_node_order_on_graph(node_order, graph):
         else:
             filtered_node_order.append(-1) # node not found in node_order list
     return filtered_node_order
+    
+def get_frame_start_and_count(consecutive_node_order, assignments, partition):
+        ordered_assignments = {order:assignment for order,assignment in sorted(zip(consecutive_node_order, assignments)) if assignment != -1}
+        valid_nodes = [node for node in consecutive_node_order if node != -1]
+        partition_frame_start = [i for i, a in enumerate(ordered_assignments.values()) if a == partition] # assignment start indexes for given partition
+        partition_frame_start_extended = partition_frame_start + [len(valid_nodes)] # add last frame id
+        partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values    
+        return partition_frame_start, partition_frame_count
 
-def write_dgs_file(output, partition, graph, node_order, assignments, label_type, colour_attr):
+def write_dgs_file(output, partition, graph, consecutive_node_order, assignments, label_type, colour_attr, size_per_node, frame_start_per_node, frame_count_per_node):
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
 
@@ -165,14 +173,17 @@ def write_dgs_file(output, partition, graph, node_order, assignments, label_type
         outf.write("partition_{} 0 0\n".format(partition))
 
         # sort nodes according to node_order
-        filtered_node_order = filter_node_order_on_graph(node_order, graph)
+        filtered_node_order = filter_node_order_on_graph(consecutive_node_order, graph)
         sorted_nodes = [node for _,node in sorted(zip(filtered_node_order, graph.nodes(data=True)))]
+
+        # get partition start and count per node
+        partition_frame_start, partition_frame_count = get_frame_start_and_count(consecutive_node_order, assignments, partition)
 
         i = 0
         st = 1
         nodes_added = []
         edges_added = []
-        for n in sorted_nodes:
+        for index, n in enumerate(sorted_nodes):
             node_id = n[0]
 
             if colour_attr in n[1]:
@@ -183,9 +194,9 @@ def write_dgs_file(output, partition, graph, node_order, assignments, label_type
             if label_type == 'id':
                 label = node_id
             else:
-                label = node_order[node_id - 1] # node x is at index x - 1 in the node_order list
+                label = consecutive_node_order[node_id - 1] # node x is at index x - 1 in the node_order list
 
-            outf.write("an {} c='{}' l='{}'\n".format(node_id, colour, label))
+            outf.write("an {} c='{}' l='{}' s='{}' fs='{}' fc='{}'\n".format(node_id, colour, label, size_per_node[node_id], partition_frame_start[index], partition_frame_count[index]))
             nodes_added += [node_id]
 
             for e in graph.edges(node_id):

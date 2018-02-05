@@ -14,6 +14,7 @@ from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF
 from svgutils.compose import *
 import networkx as nx
+from scipy import interpolate
 
 import file_io
 import graph
@@ -74,9 +75,15 @@ def parse_arguments():
     coloring_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
                         help='seed for coloring with gvmap')
     # Image style
-    styling_group = parser.add_argument_group('image options')
-    styling_group.add_argument('--node-size', type=int, default=10, metavar='S',
-                        help='node size in pixels (default=10)')
+    styling_group = parser.add_argument_group('image options')   
+    styling_group.add_argument('--node-size-mode', choices=['fixed','centrality', 'highlight-new'], default='fixed',
+                        help='node size mode')
+    styling_group.add_argument('--node-size', type=int, metavar='S',
+                        help='node size in pixels (default=10). Use with node-size-mode=fixed.')
+    styling_group.add_argument('--min-node-size', type=int, metavar='S',
+                        help='minimum node size in pixels (default=10). Use with node-size-mode=centrality or highlight-new.')
+    styling_group.add_argument('--max-node-size', type=int, metavar='S',
+                        help='maximum node size in pixels (default=30). Use with node-size-mode=centrality or highlight-new.')                       
     styling_group.add_argument('--edge-size', type=int, default=1, metavar='S',
                         help='edge size in pixels (default=1)')
     styling_group.add_argument('--label-size', type=int, default=10, metavar='S',
@@ -121,7 +128,14 @@ def validate_arguments(args):
         errors.append("The --repulsion option is only available with the linlog layout")
     if not args.video and args.fps:
         errors.append("The --fps option is only available with the --video option")
-
+    # Image style
+    if args.node_size and args.node_size_mode != 'fixed':
+        errors.append("The --node-size option is only available with --node-size-mode fixed")
+    if args.min_node_size and args.node_size_mode == 'fixed':
+        errors.append("The --min-node-size option is only available with --node-size-mode centrality or highlight-new")
+    if args.max_node_size and args.node_size_mode == 'fixed':
+        errors.append("The --max-node-size option is only available with --node-size-mode centrality or highlight-new")
+    
     if errors:
         for error in errors:
             logging.error(error)
@@ -134,6 +148,12 @@ def validate_arguments(args):
         args.cluster_seed = utils.get_random_seed()
     if not args.infomap_calls:
         args.infomap_calls = 0
+    if not args.node_size:
+        args.node_size = 10
+    if not args.min_node_size:
+        args.max_node_size = 10
+    if not args.min_node_size:
+        args.max_node_size = 30
 
 def parse_config_file(config_file):
     logging.debug("Reading the config file %s", config_file)
@@ -174,11 +194,18 @@ def run(args, config):
 
     # Split graph into sub-graphs (one per partition)
     sub_graphs = split_graph(input_graph, assignments, partitions)
+    
+    # Get degree centrality
+    size_per_node = get_size_per_node(input_graph, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
+    
+    # Frame start and count per node
+    frame_start_per_node_per_graph, frame_count_per_node_per_graph = get_frames_per_node_per_graph(sub_graphs, assignments, partitions)
 
     # Generate layout of each sub-graph
     generate_layouts(sub_graphs, args.output_dir, filtered_node_order, assignments, args.layout, args.layout_seed,
                      args.force, args.attraction, args.repulsion,
-                     args.node_size, args.edge_size, args.label_size, args.label_type, args.width, args.height)
+                     size_per_node, args.node_size_mode, args.edge_size, args.label_size, args.label_type, args.width, args.height,
+                     frame_start_per_node_per_graph, frame_count_per_node_per_graph)
 
     # Perform clustering of each sub-graph
     clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering,
@@ -190,10 +217,10 @@ def run(args, config):
 
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, filtered_node_order, assignments, args.label_type, 'fillcolor')
+        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, filtered_node_order, assignments, args.label_type, 'fillcolor', size_per_node, frame_start_per_node_per_graph[index], frame_count_per_node_per_graph[index])
         generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed,
                         args.force, args.attraction, args.repulsion,
-                        args.node_size, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
+                        args.node_size_mode, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
 
     # Combine frames into tiles
     if args.video or args.pdf:
@@ -253,6 +280,51 @@ def filter_node_order_on_assignments(node_order, assignments):
 
 def split_graph(input_graph, assignments, partitions):
     return graph.create_sub_graphs(input_graph, partitions, assignments)
+    
+def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_size):
+    if node_size_mode == 'centrality':
+        centrality_per_node = nx.degree_centrality(graph)
+        min_centrality = min(centrality_per_node.values())
+        max_centrality = max(centrality_per_node.values())
+        interpolator = interpolate.interp1d([min_centrality, max_centrality],[min_node_size, max_node_size], kind='linear')
+        size_per_node = {k:int(interpolator(v)) for k,v in centrality_per_node.items()}
+    elif node_size_mode == 'highlight-new':
+        size_per_node = {node:min_node_size for node in graph.nodes()}
+    else: # fixed
+        size_per_node = {node:node_size for node in graph.nodes()}
+    return size_per_node
+
+def count_frames_per_node(assignments, partition):
+    frames_per_node = []
+    frame_count = 0
+    
+    
+    for a in assignments:
+        if a == partition:
+            frames_per_node.append(frame_count)
+            frame_count = 0
+        else:
+            frame_count += 1
+            
+    
+def get_frames_per_node_per_graph(sub_graphs, assignments, partitions):
+    filtered_assignments = [a for a in assignments if a != -1]
+
+    frame_start_per_node_per_graph = []
+    frame_count_per_node_per_graph = []
+    for index, sub_graph in enumerate(sub_graphs):
+        partition = partitions[index] # partition for current graph
+        
+        partition_start_indexes = [i for i, a in enumerate(filtered_assignments) if a == partition] # assignment start indexes for given partition
+        frame_start_per_node = {node:partition_start_indexes[i] for i,node in enumerate(sub_graph.nodes())}
+        partition_start_indexes_ext = partition_start_indexes + [len(filtered_assignments)]
+        partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_start_indexes_ext, partition_start_indexes_ext[1:])]
+        
+        frame_count_per_node = {node:partition_frame_count[i] for i,node in enumerate(sub_graph.nodes())}
+
+        frame_start_per_node_per_graph.append(frame_start_per_node)
+        frame_count_per_node_per_graph.append(frame_count_per_node)
+    return frame_start_per_node_per_graph, frame_count_per_node_per_graph
 
 def get_partitions(assignments):
     unique_assignments = set(assignments)
@@ -268,10 +340,10 @@ def log_partitions_info(partitions, assignments):
         logging.info("[Partition %d contains %d nodes]", partition, len([p for p in assignments if p == partition]))
     logging.info("[Number of nodes excluded: %d]", len([p for p in assignments if p == -1]))
 
-def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, label_type, width, height):
+def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, seed, force, attraction, repulsion, size_per_node, node_size_mode, edge_size, label_size, label_type, width, height, frame_start_per_node_per_graph, frame_count_per_node_per_graph):
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, assignments, label_type, None)
-        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
+        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, assignments, label_type, None, size_per_node, frame_start_per_node_per_graph[index], frame_count_per_node_per_graph[index])
+        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True)
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
 
@@ -332,7 +404,7 @@ def perform_coloring(sub_graphs, clusters_per_node_per_graph, clustering, output
     # Extract colors from gvmap output and update partition graphs
     color.add_colors_to_partition_graphs(gvmap_dot_file, sub_graphs, clusters_per_node_per_graph)
 
-def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, edge_size, label_size, width, height, mode):
+def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mode, edge_size, label_size, width, height, mode):
     output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
     out = os.path.join(output, 'frames_partition/p{}_'.format(p))
     if mode == 'dot':
@@ -340,7 +412,7 @@ def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size, e
     else:
         logging.info("Generating graph images (%s) for DGS file %s", out, dgs_file)
     args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs_file, '-out', out, '-layout', layout, '-seed', str(seed),
-                    '-node_size', str(node_size), '-edge_size', str(edge_size), '-label_size', str(label_size),
+                    '-node_size_mode', node_size_mode, '-edge_size', str(edge_size), '-label_size', str(label_size),
                     '-width', str(width), '-height', str(height),
                     '-mode', mode, '-dotfile', output_dot_filepath]
     if force:
@@ -399,15 +471,14 @@ def create_svg_tiles(svg_tiles, output_svg_file, width, height, border_size, col
 def combine_images_into_tiles(output, assignments, node_order, partitions, border_size, width, height):
     logging.info("Combining images into tiles")
     partitions_count = len(partitions)
+    
+    # get all frames
     frames = {}
-    frames_max = 0
     for p in range(0, partitions_count):
-        path_glob = os.path.join(output, 'frames_partition', 'p{}_*.png'.format(p))
+        path_glob = os.path.join(output, 'frames_partition', 'p{}_*_new.png'.format(p))
         frames[p] = sorted(glob.glob(path_glob))
-        total = len(frames[p])
-        if frames_max < total:
-            frames_max = total
 
+    # create output folder
     path_joined = os.path.join(output, 'frames_joined')
     if not os.path.exists(path_joined):
         os.makedirs(path_joined)
@@ -418,8 +489,9 @@ def combine_images_into_tiles(output, assignments, node_order, partitions, borde
     # compute number of rows and columns
     columns = math.ceil(math.sqrt(partitions_count))
 
-    pframe = [-1] * partitions_count
-    tiles = ['frame_blank.png'] * partitions_count
+    # insert white frames at the start to get the same number of frames per partition
+    for p in range(0, partitions_count):
+        frames[p] = ['frame_blank.png'] * (len([a for a in sorted_assignments if a != -1]) - len(frames[p])) + frames[p]
 
     frame_files_png = []
     frame_files_svg = []
@@ -428,10 +500,9 @@ def combine_images_into_tiles(output, assignments, node_order, partitions, borde
         if a == -1:
             continue # skip excluded nodes (assignment = -1)
 
-        partition_index = partitions.index(a) # 0-based index
-        try:
-            pframe[partition_index] += 1
-            tiles[partition_index] = frames[partition_index][pframe[partition_index]]
+        try:  
+            # get all tiles for current frame (one tile per partition)
+            tiles = [frames[p][f] for p in range(0, partitions_count)]
 
             # create png tiles
             png_frame_file = os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))
@@ -441,15 +512,14 @@ def combine_images_into_tiles(output, assignments, node_order, partitions, borde
             # create svg tiles
             svg_frame_file = os.path.join(path_joined, 'frame_{0:06d}.svg'.format(f))
             frame_files_svg.append(svg_frame_file)
-
-            svg_tiles = [os.path.splitext(tile)[0]+'.svg' for tile in tiles]
-            svg_tiles = list(map(lambda tile: tile if tile != 'frame_blank.svg' else '', svg_tiles))
+            svg_tiles = [os.path.splitext(tile)[0]+'.svg' for tile in tiles] # replace .png by .svg
+            svg_tiles = [svg_tile if os.path.isfile(svg_tile) else '' for svg_tile in svg_tiles ] # replace missing files by blank frames
             create_svg_tiles(svg_tiles, svg_frame_file, width, height, border_size, columns)
 
             f += 1
 
         except IndexError:
-            print('Missing frame p{}_{}'.format(partition_index, pframe[partition_index]))
+            print('Missing frame p{}_{}'.format(p, f))
 
     return frame_files_png, frame_files_svg
 
