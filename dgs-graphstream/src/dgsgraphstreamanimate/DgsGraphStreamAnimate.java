@@ -42,6 +42,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     private ProxyPipe pipe;
     private BarnesHutLayout layout;
     private NodeSizeMode nodeSizeMode;
+    private String shadowColor;
     private int edgeSize;
     private int labelSize;
     private int width;
@@ -55,34 +56,36 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     private int highlightedFrameCount; // Number of frames during which a node is highlighted
     private int highlightSizeMin; // Min size multiplier for highlighted nodes
     private int highlightSizeMax; // Max size multiplier for highlighted nodes
-    
+
     private enum LayoutType {
         LinLog,
         SpringBox
     }
-    
+
     private enum Mode {
         Images,
         DotFile
     }
-    
+
     private enum NodeSizeMode {
         Fixed,
         HighlightNew
     }
-        
+
     private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath,
-                            long seed, float force, float a, float r, float theta, 
-                            NodeSizeMode nodeSizeMode, int edgeSize, int labelSize, int width, int height, Boolean display)
+                            long seed, float force, float a, float r, float theta,
+                            NodeSizeMode nodeSizeMode, String shadowColor, int edgeSize, int labelSize, int width, int height, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
-        
+
         FileSourceDGS dgs = new FileSourceDGS();
-        
+
+        String styleSheet = CreateStyleSheet(shadowColor);
+
         this.g = new DefaultGraph("graph");
-        this.g.addAttribute("ui.stylesheet", "url('style.css')"); 
-        
+        this.g.addAttribute("ui.stylesheet", styleSheet);
+
         this.nodeSizeMode = nodeSizeMode;
         this.edgeSize = edgeSize;
         this.labelSize = labelSize;
@@ -97,17 +100,17 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         this.highlightedFrameCount = 4;
         this.highlightSizeMin = 1;
         this.highlightSizeMax = 3;
-        
-        
+
+
         layout = CreateLayout(layout_type, seed, force, a, r, theta);
-        
+
         fsi = new FileSinkImages("frame_", OutputType.PNG, new CustomResolution(width, height), OutputPolicy.NONE);
         fsi.setOutputPolicy(OutputPolicy.BY_STEP);
         fsi.setLayoutPolicy(LayoutPolicy.NO_LAYOUT);
         fsi.setQuality(Quality.HIGH);
         fsi.setRenderer(RendererType.SCALA);
-        fsi.setStyleSheet("url('style.css')");
-        
+        fsi.setStyleSheet(styleSheet);
+
         // chain: dgs -> g -> layout -> fsi
         dgs.addSink(this.g);
         this.g.addSink(layout);
@@ -117,26 +120,26 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         dgs.addSink(this);
 
         Viewer viewer = null;
-        
+
         if (display) {
             viewer = this.g.display();
             viewer.enableAutoLayout(layout);
             //pipe = viewer.newViewerPipe();
             pipe = viewer.newThreadProxyOnGraphicGraph();
         }
-        
+
         if (mode == Mode.Images) {
             fsi.begin(outputDirectory);
             try {
                 dgs.begin(inputDGS);
                 while (dgs.nextEvents()) {
-                    
+
                     layout.compute();
 
                     if (display) {
                         pipe.pump();
                     }
-                }    
+                }
                 dgs.end();
                 fsi.end();
             } catch (IOException e1) {
@@ -146,17 +149,17 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         } else { // DotFile
             try {
                 dgs.begin(inputDGS);
-                while (dgs.nextEvents()) {              
+                while (dgs.nextEvents()) {
                     layout.compute();
-                } 
+                }
                 fsi.begin(outputDirectory); // Get last layout to propagate to fsi without generating any image file
-                fsi.end();              
-                dgs.end();              
+                fsi.end();
+                dgs.end();
             } catch (IOException e1) {
                 e1.printStackTrace();
                 System.exit(1);
-            }       
-            
+            }
+
             try {
                 exportGraphAsDotFile(this.g, getGraphicGraph(fsi), outputDotFilepath);
             } catch (Exception e) {
@@ -165,7 +168,36 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             }
         }
     }
-    
+
+    private String CreateStyleSheet(String shadowColor) {
+        StringBuilder styleSheet = new StringBuilder()
+           .append("graph {\n")
+           .append("fill-color: rgb(255,255,255);\n")
+           .append("}\n")
+           .append("edge {\n")
+           .append("size-mode: dyn-size;\n")
+           .append("size: 2px;\n")
+           .append("}\n")
+           .append("node {\n")
+           .append("size-mode: dyn-size;\n")
+           .append("size: 10px;\n")
+           .append("stroke-mode:plain;\n")
+           .append("stroke-width:2px;\n")
+           .append("stroke-color:#FFF8;\n")
+           .append("text-alignment: above;\n")
+           .append("}\n");
+
+        if (!shadowColor.isEmpty()) {
+            styleSheet.append("node.shadow {\n")
+               .append("shadow-mode: gradient-radial; \n")
+               .append("shadow-width: 50px; \n")
+               .append(String.format("shadow-color: %s, #FFFFFF; \n", shadowColor))
+               .append("shadow-offset: 0px;\n")
+               .append("}\n");
+        }
+        return styleSheet.toString();
+    }
+
     /**
      * Create graph layout
      */
@@ -177,7 +209,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             layout.setQuality(1);
             layout.setBarnesHutTheta(theta);
             //layout.setStabilizationLimit(0);
-            
+
             return layout;
         } else {
             SpringBox layout = new SpringBox(false, new Random(seed));
@@ -185,11 +217,11 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             return layout;
         }
     }
-    
+
     /**
      * Export graph as Graphviz dot file
      */
-    private void exportGraphAsDotFile(DefaultGraph graph, GraphicGraph graphicGraph, String outputFilePath) throws IOException {          
+    private void exportGraphAsDotFile(DefaultGraph graph, GraphicGraph graphicGraph, String outputFilePath) throws IOException {
         // Add position attribute to DefaultGraph from GraphicGraph
         for (Node node : graph) {
             GraphicNode graphics_graph_node = graphicGraph.getNode(node.getId());
@@ -197,11 +229,11 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             node.addAttribute("height", 0.5);
             node.addAttribute("width", 0.5);
         }
-        // Export graph as dot file 
+        // Export graph as dot file
         FileSinkDOT dot_sink = new FileSinkDOT();
-        dot_sink.writeAll(graph, outputFilePath); 
+        dot_sink.writeAll(graph, outputFilePath);
     }
-    
+
     /**
      * Get GraphicGraph instance from FileSinkImages (only place where to get a node's position)
      */
@@ -210,13 +242,13 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         field.setAccessible(true);
         return (GraphicGraph)field.get(fsi);
     }
-    
+
     private J2DGraphRenderer getGraphRenderer(FileSinkImages fsi) throws NoSuchFieldException, IllegalAccessException {
         Field field = getField(fsi.getClass(), "renderer");
         field.setAccessible(true);
         return (J2DGraphRenderer)field.get(fsi);
     }
-    
+
     /**
      * Get class field using reflection
      */
@@ -232,11 +264,11 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             }
         }
     }
-    
+
     @Override
     public void nodeAttributeChanged(String sourceId, long timeId,
                     String nodeId, String attribute, Object oldValue, Object newValue) {
-        Node n = this.g.getNode(nodeId); 
+        Node n = this.g.getNode(nodeId);
         if (attribute.equals("c")) { // color
             int count = newValue.toString().length() - newValue.toString().replace(",", "").length() + 1;
             float share = 1.0f / (float)count;
@@ -247,27 +279,27 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             n.setAttribute("ui.pie-values", pie_values);
         } else if (attribute.equals("l")) { // label
             n.addAttribute("label", newValue.toString());
-        } else if (attribute.equals("s")) { // size 
+        } else if (attribute.equals("s")) { // size
             int size = Integer.parseInt(newValue.toString());
             this.nodeSize.put(nodeId, size);
             n.setAttribute("ui.size", size);
-        } else if (attribute.equals("fs")) { // frame start 
+        } else if (attribute.equals("fs")) { // frame start
             int start = Integer.parseInt(newValue.toString());
             this.nodeFrameStart.put(nodeId, start);
-        } else if (attribute.equals("fc")) { // frame count 
+        } else if (attribute.equals("fc")) { // frame count
             int count = Integer.parseInt(newValue.toString());
             this.nodeFrameCount.put(nodeId, count);
-        } 
+        }
     }
-    
+
     public void nodeAdded(String sourceId, long timeId, String nodeId) {
         Node n = this.g.getNode(nodeId);
         if (this.labelSize > 0) {
             n.addAttribute("text-size", this.labelSize);
         }
         addedNodes.add(nodeId);
-    }        
-    
+    }
+
     public void edgeAdded(String sourceId, long timeId, String edgeId,
             String fromNodeId, String toNodeId, boolean directed) {
         Edge e = this.g.getEdge(edgeId);
@@ -278,7 +310,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         }
         e.setAttribute("ui.size", this.edgeSize);
     }
-    
+
     private void takeScreenshot(int step, String extension) {
         try {
             getGraphRenderer(fsi).screenshot(outputDirectory + String.format("%06d_new", step) + "." + extension, width, height);
@@ -286,14 +318,14 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             e1.printStackTrace();
             System.exit(1);
         }
-    }       
-    
-    public void stepBegins(String sourceId, long timeId, double step) {       
+    }
+
+    public void stepBegins(String sourceId, long timeId, double step) {
         int lastNodeId = this.addedNodes.size() - 1;
         Node lastNode = this.g.getNode(this.addedNodes.get(lastNodeId)); // get last added node n
         int lastNodeFrameStart = this.nodeFrameStart.get(lastNode.getId());
         int lastNodeFrameCount = this.nodeFrameCount.get(lastNode.getId()); // number of frames to produce
-        
+
         int frameIndex = lastNodeFrameStart;
         for (int c = 0; c < lastNodeFrameCount; c++) { // iterates over the number of frames to be generated
             if (this.nodeSizeMode == NodeSizeMode.HighlightNew) {
@@ -307,7 +339,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
                         int size = this.nodeSize.get(node.getId());
                         if (frameOffset < this.highlightedFrameCount - 1) {
                             float multiplier = this.highlightSizeMin + ((float)(this.highlightedFrameCount - frameOffset) / (this.highlightedFrameCount)) * (this.highlightSizeMax - this.highlightSizeMin);
-                            node.setAttribute("ui.size", (int)(size * multiplier)); // set highlighted size                      
+                            node.setAttribute("ui.size", (int)(size * multiplier)); // set highlighted size
                         } else {
                             node.setAttribute("ui.size", size); // reset size to normal size (node no longer highlighted)
                         }
@@ -320,18 +352,18 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
                     }
                 }
             }
-            
+
             layout.compute(); // recompute layout
-            if (mode == Mode.Images) { 
+            if (mode == Mode.Images) {
                 takeScreenshot(frameIndex, "svg"); // export svg file
                 takeScreenshot(frameIndex, "png"); // export png file
             }
             frameIndex++;
         }
 	}
-    
+
     public static void main(String[] args) {
-        
+
         Map<String, List<String>> params = new HashMap<>();
         List<String> options = null;
 
@@ -353,7 +385,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
                 return;
             }
         }
-        
+
         Boolean error = false;
         if (!params.containsKey("dgs")) {
             System.out.println("Missing required option: -dgs\n");
@@ -378,17 +410,17 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             System.out.println("-width <arg>            image width");
             System.out.println("-height <arg>           image height");
             System.out.println("-mode <arg>             mode. options: [images|dot]. default: images");
-            System.out.println("-dotfile <arg>          output dot file");          
+            System.out.println("-dotfile <arg>          output dot file");
             System.out.println("-display screen         layout option to use. options: [screen]");
             System.out.println("-h,-help                display this help and exit");
             System.exit(1);
         }
-        
-        LayoutType layout_type = LayoutType.SpringBox;      
+
+        LayoutType layout_type = LayoutType.SpringBox;
         if (params.containsKey("layout") && params.get("layout").get(0).equals("linlog")) {
             layout_type = LayoutType.LinLog;
         }
-        Mode mode = Mode.Images;      
+        Mode mode = Mode.Images;
         if (params.containsKey("mode") && params.get("mode").get(0).equals("dot")) {
             mode = Mode.DotFile;
         }
@@ -416,9 +448,13 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (params.containsKey("theta")) {
             theta = Float.parseFloat(params.get("theta").get(0));
         }
-        NodeSizeMode nodeSizeMode = NodeSizeMode.Fixed;      
+        NodeSizeMode nodeSizeMode = NodeSizeMode.Fixed;
         if (params.containsKey("node_size_mode") && params.get("node_size_mode").get(0).equals("highlight-new")) {
             nodeSizeMode = NodeSizeMode.HighlightNew;
+        }
+        String shadowColor = "";
+        if (params.containsKey("shadow_color")) {
+            shadowColor = params.get("shadow_color").get(0);
         }
         int edgeSize = 2; // default edge size in pixels
         if (params.containsKey("edge_size")) {
@@ -436,13 +472,13 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (params.containsKey("height")) {
             height = Integer.parseInt(params.get("height").get(0));
         }
-        
+
         try {
             System.out.println(params.get("dgs").get(0));
             DgsGraphStreamAnimate dgs = new DgsGraphStreamAnimate();
-            
+
             dgs.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0),
-                           seed, force, a, r, theta, nodeSizeMode, edgeSize, labelSize, width, height, display);
+                           seed, force, a, r, theta, nodeSizeMode, shadowColor ,edgeSize, labelSize, width, height, display);
         } catch(IOException e) {
             e.printStackTrace();
         }

@@ -72,20 +72,22 @@ def parse_arguments():
     # Coloring
     coloring_group = parser.add_argument_group('coloring options')
     color_mode_group = coloring_group.add_mutually_exclusive_group()
-    color_mode_group.add_argument('--fixed-color', metavar='C',
-                        help='fixed color to use for all nodes')
+    color_mode_group.add_argument('--node-color', metavar='C',
+                        help='single color to use for all nodes')
     color_mode_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
                         help='seed for coloring with gvmap')
+    coloring_group.add_argument('--shadow-color', metavar='C',
+                        help='color of the shadow to use for highlighted nodes. Use with --node-size-mode highlight-new')
     # Image style
-    styling_group = parser.add_argument_group('image options')   
+    styling_group = parser.add_argument_group('image options')
     styling_group.add_argument('--node-size-mode', choices=['fixed','centrality', 'highlight-new'], default='fixed',
                         help='node size mode')
     styling_group.add_argument('--node-size', type=int, metavar='S',
-                        help='node size in pixels (default=10). Use with node-size-mode=fixed.')
+                        help='node size in pixels (default=10). Use with --node-size-mode fixed.')
     styling_group.add_argument('--min-node-size', type=int, metavar='S',
-                        help='minimum node size in pixels (default=10). Use with node-size-mode=centrality or highlight-new.')
+                        help='minimum node size in pixels (default=10). Use with --node-size-mode centrality or highlight-new.')
     styling_group.add_argument('--max-node-size', type=int, metavar='S',
-                        help='maximum node size in pixels (default=30). Use with node-size-mode=centrality or highlight-new.')                       
+                        help='maximum node size in pixels (default=30). Use with --node-size-mode centrality or highlight-new.')
     styling_group.add_argument('--edge-size', type=int, default=1, metavar='S',
                         help='edge size in pixels (default=1)')
     styling_group.add_argument('--label-size', type=int, default=10, metavar='S',
@@ -137,7 +139,7 @@ def validate_arguments(args):
         errors.append("The --min-node-size option is only available with --node-size-mode centrality or highlight-new")
     if args.max_node_size and args.node_size_mode == 'fixed':
         errors.append("The --max-node-size option is only available with --node-size-mode centrality or highlight-new")
-    
+
     if errors:
         for error in errors:
             logging.error(error)
@@ -196,17 +198,17 @@ def run(args, config):
 
     # Split graph into sub-graphs (one per partition)
     sub_graphs = split_graph(input_graph, assignments, partitions)
-    
+
     # Get degree centrality
     size_per_node = get_size_per_node(input_graph, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
-    
+
     # Frame start and count per node
     frame_start_per_node_per_graph, frame_count_per_node_per_graph = get_frames_per_node_per_graph(sub_graphs, assignments, partitions)
 
     # Generate layout of each sub-graph
     generate_layouts(sub_graphs, args.output_dir, filtered_node_order, assignments, args.layout, args.layout_seed,
                      args.force, args.attraction, args.repulsion,
-                     size_per_node, args.node_size_mode, args.edge_size, args.label_size, args.label_type, args.width, args.height,
+                     size_per_node, args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, args.width, args.height,
                      frame_start_per_node_per_graph, frame_count_per_node_per_graph)
 
     # Perform clustering of each sub-graph
@@ -215,14 +217,14 @@ def run(args, config):
                                                      args.cluster_seed, args.infomap_calls)
 
     # Perform coloring
-    perform_coloring(input_graph, sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, config['install_dirs']['gvmap'], args.fixed_color, args.color_seed)
+    perform_coloring(input_graph, sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, config['install_dirs']['gvmap'], args.node_color, args.color_seed)
 
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):
         dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, filtered_node_order, assignments, args.label_type, 'fillcolor', size_per_node, frame_start_per_node_per_graph[index], frame_count_per_node_per_graph[index])
         generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed,
                         args.force, args.attraction, args.repulsion,
-                        args.node_size_mode, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
+                        args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
 
     # Combine frames into tiles
     if args.video or args.pdf:
@@ -282,7 +284,7 @@ def filter_node_order_on_assignments(node_order, assignments):
 
 def split_graph(input_graph, assignments, partitions):
     return graph.create_sub_graphs(input_graph, partitions, assignments)
-    
+
 def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_size):
     if node_size_mode == 'centrality':
         centrality_per_node = nx.degree_centrality(graph)
@@ -294,8 +296,8 @@ def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_
         size_per_node = {node:min_node_size for node in graph.nodes()}
     else: # fixed
         size_per_node = {node:node_size for node in graph.nodes()}
-    return size_per_node            
-    
+    return size_per_node
+
 def get_frames_per_node_per_graph(sub_graphs, assignments, partitions):
     filtered_assignments = [a for a in assignments if a != -1]
 
@@ -303,12 +305,12 @@ def get_frames_per_node_per_graph(sub_graphs, assignments, partitions):
     frame_count_per_node_per_graph = []
     for index, sub_graph in enumerate(sub_graphs):
         partition = partitions[index] # partition for current graph
-        
+
         partition_start_indexes = [i for i, a in enumerate(filtered_assignments) if a == partition] # assignment start indexes for given partition
         frame_start_per_node = {node:partition_start_indexes[i] for i,node in enumerate(sub_graph.nodes())}
         partition_start_indexes_ext = partition_start_indexes + [len(filtered_assignments)]
         partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_start_indexes_ext, partition_start_indexes_ext[1:])]
-        
+
         frame_count_per_node = {node:partition_frame_count[i] for i,node in enumerate(sub_graph.nodes())}
 
         frame_start_per_node_per_graph.append(frame_start_per_node)
@@ -329,10 +331,10 @@ def log_partitions_info(partitions, assignments):
         logging.info("[Partition %d contains %d nodes]", partition, len([p for p in assignments if p == partition]))
     logging.info("[Number of nodes excluded: %d]", len([p for p in assignments if p == -1]))
 
-def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, seed, force, attraction, repulsion, size_per_node, node_size_mode, edge_size, label_size, label_type, width, height, frame_start_per_node_per_graph, frame_count_per_node_per_graph):
+def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, seed, force, attraction, repulsion, size_per_node, node_size_mode, shadow_color, edge_size, label_size, label_type, width, height, frame_start_per_node_per_graph, frame_count_per_node_per_graph):
     for index, sub_graph in enumerate(sub_graphs):
         dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, assignments, label_type, None, size_per_node, frame_start_per_node_per_graph[index], frame_count_per_node_per_graph[index])
-        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
+        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True)
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
 
@@ -367,9 +369,9 @@ def run_clustering(output, clustering_method, graph, graph_id, oslom2_dir, infom
         clusters_per_node = file_io.read_infomap_tree_file(output_tree_file, level) # get cluster(s) from Infomap .tree file
     return clusters_per_node
 
-def perform_coloring(graph, sub_graphs, clusters_per_node_per_graph, clustering, output_dir, gvmap_dir, fixed_color, color_seed):
-    if fixed_color:
-        colors_per_node = {node:fixed_color for node in graph.nodes()}
+def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, clustering, output_dir, gvmap_dir, node_color, color_seed):
+    if node_color:
+        colors_per_node = {node:node_color for node in full_graph.nodes()}
     else:
         if clustering != 'graphviz':
             # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
@@ -394,13 +396,13 @@ def perform_coloring(graph, sub_graphs, clusters_per_node_per_graph, clustering,
         gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath, gvmap_dir)
 
         # Extract colors from gvmap output and update partition graphs
-        color_per_node = graph.get_node_attribute_from_dot_file(merged_graph_dot_filepath, 'fillcolor', True, True)
+        color_per_node = graph.get_node_attribute_from_dot_file(gvmap_dot_file, 'fillcolor', True, True)
         colors_per_node = color.get_colors_per_node_global(color_per_node, clusters_per_node_per_graph) # combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node
-    
+
     # add colors to graphs
     color.add_colors_to_partition_graphs(colors_per_node, sub_graphs)
 
-def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mode, edge_size, label_size, width, height, mode):
+def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mode, shadow_color, edge_size, label_size, width, height, mode):
     output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
     out = os.path.join(output, 'frames_partition/p{}_'.format(p))
     if mode == 'dot':
@@ -417,6 +419,8 @@ def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mo
         args += ['-a', str(a)]
     if r:
         args += ['-r', str(r)]
+    if shadow_color:
+        args += ['-shadow_color', shadow_color]
     logging.debug("dgs-graphstream.jar command: %s", ' '.join(args))
     graphstream_log = os.path.join(output, "graphstream.log")
     with open(graphstream_log, "w") as logwriter:
@@ -467,7 +471,7 @@ def create_svg_tiles(svg_tiles, output_svg_file, width, height, border_size, col
 def combine_images_into_tiles(output, assignments, node_order, partitions, border_size, width, height):
     logging.info("Combining images into tiles")
     partitions_count = len(partitions)
-    
+
     # get all frames
     frames = {}
     for p in range(0, partitions_count):
@@ -496,7 +500,7 @@ def combine_images_into_tiles(output, assignments, node_order, partitions, borde
         if a == -1:
             continue # skip excluded nodes (assignment = -1)
 
-        try:  
+        try:
             # get all tiles for current frame (one tile per partition)
             tiles = [frames[p][f] for p in range(0, partitions_count)]
 
