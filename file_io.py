@@ -145,26 +145,28 @@ def read_infomap_tree_file(filepath, level):
 
     return node_dict
     
-def get_frame_start_and_count(consecutive_node_order, assignments, partition):
-        valid_nodes = [node for node in consecutive_node_order if assignments[node] != -1]
-        ordered_assignments = [assignments[node] for node in consecutive_node_order if assignments[node] != -1]
-        partition_frame_start = [i for i, a in enumerate(ordered_assignments) if a == partition] # assignment start indexes for given partition
-        partition_frame_start_extended = partition_frame_start + [len(valid_nodes)] # add last frame id
-        partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values    
-        return partition_frame_start, partition_frame_count
+def get_frame_start_and_count(full_graph, partition):
+    ''' Global frame start and count per node '''
+    sorted_nodes = sorted(full_graph.nodes(data=True), key=lambda node: node[1]['order'])
+    ordered_assignments = [node[1]['partition'] for node in sorted_nodes]
+    partition_frame_start = [i for i, a in enumerate(ordered_assignments) if a == partition] # assignment start indexes for given partition
+    partition_frame_start_extended = partition_frame_start + [len(sorted_nodes)] # add last frame id
+    partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values    
+    return partition_frame_start, partition_frame_count
 
-def write_dgs_file(output, partition, graph, consecutive_node_order, assignments, label_type, colour_attr, size_per_node, frame_start_per_node, frame_count_per_node):
+def write_dgs_file(output, graph, full_graph, label_type, colour_attr, size_per_node):
+    partition = graph.graph['partition']
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
 
     with open(filename, 'w') as outf:
         outf.write("DGS004\n")
         outf.write("partition_{} 0 0\n".format(partition))
-
+ 
+        # get partition start and count per node
+        partition_frame_start, partition_frame_count = get_frame_start_and_count(full_graph, partition)
         # sort nodes according to node_order
         sorted_nodes = sorted(graph.nodes(data=True), key=lambda node: node[1]['order'])
-        # get partition start and count per node
-        partition_frame_start, partition_frame_count = get_frame_start_and_count(consecutive_node_order, assignments, partition)
 
         i = 0
         st = 1
@@ -191,7 +193,7 @@ def write_dgs_file(output, partition, graph, consecutive_node_order, assignments
             elif label_type == 'id':
                 label = node_id
             else:
-                label = consecutive_node_order.index(node_id) + 1 # starts at 1
+                label = n[1]['order'] # starts at 1
             
             node_size = size_per_node[node_id] if node_id in size_per_node else 0 # size of hidden nodes
             

@@ -101,6 +101,8 @@ def parse_arguments():
                         help='image width (default=1280)')
     styling_group.add_argument('--height', type=int, default=720, metavar='H',
                         help='image height (default=720)')
+    styling_group.add_argument('--show-cut-edges', action='store_true',
+                        help='show edges that were cut by the partitioning')
     # Video
     video_group = parser.add_argument_group('video options')
     video_group.add_argument('--video',
@@ -197,6 +199,10 @@ def run(args, config):
 
     # Split graph into sub-graphs (one per partition)
     sub_graphs = split_graph(input_graph, assignments, partitions)
+    
+    # Add cut edges to graph
+    if args.show_cut_edges:
+        add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments)
 
     # Read node order file
     filtered_node_order = get_node_order(args.order, args.order_seed, nx.number_of_nodes(input_graph), sub_graphs, assignments)
@@ -204,14 +210,10 @@ def run(args, config):
     # Get size per node
     size_per_node = get_size_per_node(input_graph, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
 
-    # Frame start and count per node
-    frame_start_per_node_per_graph, frame_count_per_node_per_graph = get_frames_per_node_per_graph(sub_graphs, assignments, partitions)
-
     # Generate layout of each sub-graph
-    generate_layouts(sub_graphs, args.output_dir, filtered_node_order, assignments, args.layout, args.layout_seed,
+    generate_layouts(sub_graphs, nx.union_all(sub_graphs), args.output_dir, args.layout, args.layout_seed,
                      args.force, args.attraction, args.repulsion,
-                     size_per_node, args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, args.width, args.height,
-                     frame_start_per_node_per_graph, frame_count_per_node_per_graph)
+                     size_per_node, args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, args.width, args.height)
 
     # Perform clustering of each sub-graph
     clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering,
@@ -223,7 +225,7 @@ def run(args, config):
 
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(args.output_dir, index, sub_graph, filtered_node_order, assignments, args.label_type, 'fillcolor', size_per_node, frame_start_per_node_per_graph[index], frame_count_per_node_per_graph[index])
+        dgs_file = file_io.write_dgs_file(args.output_dir, sub_graph, nx.union_all(sub_graphs), args.label_type, 'fillcolor', size_per_node)
         generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed,
                         args.force, args.attraction, args.repulsion,
                         args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
@@ -256,6 +258,14 @@ def get_assignments(assignments_file, show_partitions, graph):
         # Add all nodes to a single partition
         assignments = {v+1:0 for v in xrange(nx.number_of_nodes(graph))}
     return assignments
+    
+def get_hidden_nodes(sub_graphs):
+    hidden_nodes = []
+    for sub_graph in sub_graphs:
+        for node in sub_graph.nodes():
+            if 'hidden' in sub_graph.nodes[node]:
+                hidden_nodes.append((node, sub_graph.nodes[node]['connect']))
+    return hidden_nodes
 
 def get_node_order(order_file, order_seed, total_node_count, sub_graphs, assignments):
     ''' Return ordered list of node IDs '''
@@ -277,15 +287,11 @@ def get_node_order(order_file, order_seed, total_node_count, sub_graphs, assignm
             node_order.remove(node)
 
     # Get hidden nodes
-    hidden_nodes = []
-    for sub_graph in sub_graphs:
-        for node in sub_graph.nodes():
-            if 'hidden' in sub_graph.nodes[node]:
-                hidden_nodes.append((node, sub_graph.nodes[node]['connect']))
+    hidden_nodes = get_hidden_nodes(sub_graphs)
 
     # Add hidden nodes to node_order list
-    for hidden_node, connected_node in hidden_nodes:
-        hidden_node_index = max(node_order.index(connected_node[0]), node_order.index(connected_node[1])) + 1
+    for hidden_node, connected_nodes in hidden_nodes:
+        hidden_node_index = max(node_order.index(connected_nodes[0]), node_order.index(connected_nodes[1])) + 1 # hidden node get added after the last of the 2 nodes from the edge it represents
         node_order.insert(hidden_node_index, hidden_node)
 
     # Add order as node attribute
@@ -294,51 +300,47 @@ def get_node_order(order_file, order_seed, total_node_count, sub_graphs, assignm
             sub_graph.nodes[node]['order'] = node_order.index(node) + 1 # order starts at 1
 
     return node_order
-
-def filter_node_order_on_assignments(node_order, assignments):
-    ''' Return global node order with excluded nodes marked as -1 '''
-    sorted_node_indexes = sorted(range(len(node_order)), key=lambda k: node_order[k]) # sorted node indexes
-    current_node_order = 1 # node order starts at 1
-    filtered_node_order = {}
-    for node in node_order:
-        if assignments[node] != -1:
-            filtered_node_order[node] = current_node_order # mark valid node with its order
-            current_node_order +=1
-        else:
-            filtered_node_order[node] = -1 # mark excluded node (assignment = -1) as -1
-    return filtered_node_order
-
-def split_graph(input_graph, assignments, partitions):
-    # Split graph by partitions
-    sub_graphs = graph.create_sub_graphs(input_graph, partitions, assignments)
-    # Add cut edges
+    
+def get_internal_external_nodes(edge, graph):
+    if edge[0] not in graph.nodes():
+        external_node = edge[0] # node from another partition
+        internal_node = edge[1] # node from current partition
+    elif edge[1] not in graph.nodes():
+        external_node = edge[1]
+        internal_node = edge[0]
+    else:
+        external_node = -1
+        internal_node = -1
+    return internal_node, external_node
+    
+def add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments):
+    # Get cut edges
     cut_edges = get_cut_edges(input_graph, sub_graphs)
+    # Add cut edges and hidden nodes to partition graphs
+    logging.info("Adding %d cut edges to the partition graphs", len(cut_edges))
+    available_node_id = max(input_graph.nodes()) + 1 # next available node id
     for sub_graph in sub_graphs:
-        partition = sub_graph.graph['partition']
         sub_graph_cut_edges = [edge for edge in cut_edges if is_edge_connected_to_graph(edge, sub_graph)]
         for edge in sub_graph_cut_edges:
-            if edge[0] not in sub_graph.nodes():
-                external_node = edge[0]
-                new_node = edge[0] * 100000 + partition # add partition to node ID to avoid collisions between partitions
-                existing_node = edge[1]
-            elif edge[1] not in sub_graph.nodes():
-                external_node = edge[1]
-                new_node = edge[1] * 100000 + partition
-                existing_node = edge[0]
+            internal_node, external_node = get_internal_external_nodes(edge, sub_graph)
+            new_node = available_node_id
             sub_graph.add_node(new_node, hidden=1)
+            available_node_id += 1
             # add hidden_node attribute to link existing node to hidden node
-            if 'hidden_nodes' in sub_graph.nodes[existing_node]:
-                sub_graph.nodes[existing_node]['hidden_nodes'].append(new_node) # append node to hidden_nodes attribute
+            if 'hidden_nodes' in sub_graph.nodes[internal_node]:
+                sub_graph.nodes[internal_node]['hidden_nodes'].append(new_node) # append node to hidden_nodes attribute
             else:
-                sub_graph.nodes[existing_node]['hidden_nodes'] = [new_node]
+                sub_graph.nodes[internal_node]['hidden_nodes'] = [new_node]
             # add partition and connect attributes
-            sub_graph.nodes[new_node]['partition'] = sub_graph.nodes[existing_node]['partition']
-            sub_graph.nodes[new_node]['connect'] = [existing_node, external_node] # add attribute with the 2 nodes from different partitions that the hidden edge is connecting
+            sub_graph.nodes[new_node]['partition'] = sub_graph.nodes[internal_node]['partition']
+            sub_graph.nodes[new_node]['connect'] = [internal_node, external_node] # add attribute with the 2 nodes from different partitions that the hidden edge is connecting
             # add edge between existing and new nodes
-            sub_graph.add_edge(existing_node, new_node)
-            # insert nodes into assignments
-            assignments[new_node] = assignments[existing_node]
-    return sub_graphs
+            sub_graph.add_edge(internal_node, new_node)
+            # insert node into assignments
+            assignments[new_node] = assignments[internal_node]
+
+def split_graph(input_graph, assignments, partitions):
+    return graph.create_sub_graphs(input_graph, partitions, assignments)
 
 def is_edge_connected_to_graph(edge, graph):
     return edge[0] in graph.nodes() or edge[1] in graph.nodes()
@@ -368,25 +370,6 @@ def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_
         size_per_node = {node:node_size for node in graph.nodes()}
     return size_per_node
 
-def get_frames_per_node_per_graph(sub_graphs, assignments, partitions):
-    filtered_assignments = [a for a in assignments.values() if a != -1]
-
-    frame_start_per_node_per_graph = []
-    frame_count_per_node_per_graph = []
-    for index, sub_graph in enumerate(sub_graphs):
-        partition = partitions[index] # partition for current graph
-
-        partition_start_indexes = [i for i, a in enumerate(filtered_assignments) if a == partition] # assignment start indexes for given partition
-        frame_start_per_node = {node:partition_start_indexes[i] for i,node in enumerate(sub_graph.nodes())}
-        partition_start_indexes_ext = partition_start_indexes + [len(filtered_assignments)]
-        partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_start_indexes_ext, partition_start_indexes_ext[1:])]
-
-        frame_count_per_node = {node:partition_frame_count[i] for i,node in enumerate(sub_graph.nodes())}
-
-        frame_start_per_node_per_graph.append(frame_start_per_node)
-        frame_count_per_node_per_graph.append(frame_count_per_node)
-    return frame_start_per_node_per_graph, frame_count_per_node_per_graph
-
 def get_partitions(assignments):
     unique_assignments = set(assignments.values())
     try:
@@ -398,12 +381,13 @@ def get_partitions(assignments):
 def log_partitions_info(partitions, assignments):
     logging.info("Found %d partitions in the assignments", len(partitions))
     for partition in partitions:
-        logging.info("[Partition %d contains %d nodes]", partition, len([p for n,p in assignments.items() if p == partition]))
-    logging.info("[Number of nodes excluded: %d]", len([p for n,p in assignments.items() if p == -1]))
+        logging.info("[Partition %d contains %d nodes]", partition, len([p for _,p in assignments.items() if p == partition]))
+    logging.info("[Number of nodes included: %d]", len([p for _,p in assignments.items() if p != -1]))
+    logging.info("[Number of nodes excluded: %d]", len([p for _,p in assignments.items() if p == -1]))
 
-def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, seed, force, attraction, repulsion, size_per_node, node_size_mode, shadow_color, edge_size, label_size, label_type, width, height, frame_start_per_node_per_graph, frame_count_per_node_per_graph):
+def generate_layouts(sub_graphs, full_graph, output_dir, layout, seed, force, attraction, repulsion, size_per_node, node_size_mode, shadow_color, edge_size, label_size, label_type, width, height):
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(output_dir, index, sub_graph, node_order, assignments, label_type, None, size_per_node, frame_start_per_node_per_graph[index], frame_count_per_node_per_graph[index])
+        dgs_file = file_io.write_dgs_file(output_dir, sub_graph, full_graph, label_type, None, size_per_node)
         dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True)
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
