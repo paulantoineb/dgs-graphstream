@@ -26,8 +26,11 @@ def create_sub_graphs(graph, partitions, assignments):
     logging.info("Splitting graph by partition into %d sub-graphs", len(partitions))
     sub_graphs = []
     for partition in partitions:
-        sub_graph_nodes = [i + 1 for i,p in enumerate(assignments) if p == partition] # Need to add 1 as nodes from METIS start at 1
-        sub_graph = graph.subgraph(sub_graph_nodes)
+        sub_graph_nodes = [n for n,p in assignments.items() if p == partition] # Need to add 1 as nodes from METIS start at 1
+        sub_graph = graph.subgraph(sub_graph_nodes).copy() # make deep copy so that the graph is editable
+        sub_graph.graph['partition'] = partition
+        for node in sub_graph.nodes():
+            sub_graph.nodes[node]['partition'] = partition
         sub_graphs.append(sub_graph)
     return sub_graphs
 

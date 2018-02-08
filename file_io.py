@@ -102,7 +102,7 @@ def read_graph_from_file(file, format):
 def read_assignments_file(file):
     logging.info("Reading assignments file %s", file)
     with open(file, 'r') as f:
-        return [int(l.strip()) for l in f.readlines()]
+        return {i+1:int(l.strip()) for i,l in enumerate(f.readlines())}
 
 def read_order_file(file):
     logging.info("Reading order file %s", file)
@@ -144,22 +144,11 @@ def read_infomap_tree_file(filepath, level):
             line = next(file, None)
 
     return node_dict
-
-def filter_node_order_on_graph(node_order, graph):
-    ''' Filter node order list for nodes in graph '''
-    filtered_node_order = []
-    for node in graph.nodes():
-        node_order_index = node - 1 # node x is at index x - 1 in the node_order list
-        if node_order_index >=0 and node_order_index < len(node_order):
-            filtered_node_order.append(node_order[node_order_index])
-        else:
-            filtered_node_order.append(-1) # node not found in node_order list
-    return filtered_node_order
     
 def get_frame_start_and_count(consecutive_node_order, assignments, partition):
-        ordered_assignments = {order:assignment for order,assignment in sorted(zip(consecutive_node_order, assignments)) if assignment != -1}
-        valid_nodes = [node for node in consecutive_node_order if node != -1]
-        partition_frame_start = [i for i, a in enumerate(ordered_assignments.values()) if a == partition] # assignment start indexes for given partition
+        valid_nodes = [node for node in consecutive_node_order if assignments[node] != -1]
+        ordered_assignments = [assignments[node] for node in consecutive_node_order if assignments[node] != -1]
+        partition_frame_start = [i for i, a in enumerate(ordered_assignments) if a == partition] # assignment start indexes for given partition
         partition_frame_start_extended = partition_frame_start + [len(valid_nodes)] # add last frame id
         partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values    
         return partition_frame_start, partition_frame_count
@@ -173,9 +162,7 @@ def write_dgs_file(output, partition, graph, consecutive_node_order, assignments
         outf.write("partition_{} 0 0\n".format(partition))
 
         # sort nodes according to node_order
-        filtered_node_order = filter_node_order_on_graph(consecutive_node_order, graph)
-        sorted_nodes = [node for _,node in sorted(zip(filtered_node_order, graph.nodes(data=True)))]
-
+        sorted_nodes = sorted(graph.nodes(data=True), key=lambda node: node[1]['order'])
         # get partition start and count per node
         partition_frame_start, partition_frame_count = get_frame_start_and_count(consecutive_node_order, assignments, partition)
 
@@ -186,17 +173,29 @@ def write_dgs_file(output, partition, graph, consecutive_node_order, assignments
         for index, n in enumerate(sorted_nodes):
             node_id = n[0]
 
-            if colour_attr in n[1]:
-                colour = n[1][colour_attr] # get color(s) from attributes
+            if 'hidden' in n[1]:
+                if 'connect' in n[1]: 
+                    connected_nodes = n[1]['connect']
+                    connected_node = connected_nodes[0] if connected_nodes[0] in graph.nodes() else connected_nodes[1]
+                    if colour_attr in graph.nodes[connected_node]:
+                        color = graph.nodes[connected_node][colour_attr] # give hidden node the color of its first connected node
+                    else:
+                        color = 'black'
+            elif colour_attr in n[1]:
+                color = n[1][colour_attr] # get color(s) from attributes
             else:
-                colour = 'black'
+                color = 'black'
 
-            if label_type == 'id':
+            if 'hidden' in n[1]:
+                label = '' # label of hidden nodes
+            elif label_type == 'id':
                 label = node_id
             else:
-                label = consecutive_node_order[node_id - 1] # node x is at index x - 1 in the node_order list
-
-            outf.write("an {} c='{}' l='{}' s='{}' fs='{}' fc='{}'\n".format(node_id, colour, label, size_per_node[node_id], partition_frame_start[index], partition_frame_count[index]))
+                label = consecutive_node_order.index(node_id) + 1 # starts at 1
+            
+            node_size = size_per_node[node_id] if node_id in size_per_node else 0 # size of hidden nodes
+            
+            outf.write("an {} c='{}' l='{}' s='{}' fs='{}' fc='{}'\n".format(node_id, color, label, node_size, partition_frame_start[index], partition_frame_count[index]))
             nodes_added += [node_id]
 
             for e in graph.edges(node_id):

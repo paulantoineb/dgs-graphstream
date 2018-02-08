@@ -7,6 +7,7 @@ import logging
 import argparse
 import configparser
 import subprocess
+import itertools
 import random
 import math
 import fpdf
@@ -189,17 +190,18 @@ def run(args, config):
     input_graph = file_io.read_graph_from_file(args.graph, args.format)
     logging.info("The input graph contains %d nodes and %d edges", nx.number_of_nodes(input_graph), nx.number_of_edges(input_graph))
 
-    # Read assignments and node order files
+    # Read assignments file
     assignments = get_assignments(args.assignments, args.show_partitions, input_graph)
-    node_order = get_node_order(args.order, args.order_seed, input_graph)
-    filtered_node_order = filter_node_order_on_assignments(node_order, assignments)
     partitions = get_partitions(assignments) # Getting partitions from the assignments
     log_partitions_info(partitions, assignments)
 
     # Split graph into sub-graphs (one per partition)
     sub_graphs = split_graph(input_graph, assignments, partitions)
 
-    # Get degree centrality
+    # Read node order file
+    filtered_node_order = get_node_order(args.order, args.order_seed, nx.number_of_nodes(input_graph), sub_graphs, assignments)
+
+    # Get size per node
     size_per_node = get_size_per_node(input_graph, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
 
     # Frame start and count per node
@@ -228,7 +230,7 @@ def run(args, config):
 
     # Combine frames into tiles
     if args.video or args.pdf:
-        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, assignments, filtered_node_order, partitions, args.border_size, args.width, args.height)
+        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, partitions, args.border_size, args.width, args.height)
 
     # Convert frames to video
     if args.video:
@@ -247,43 +249,111 @@ def get_assignments(assignments_file, show_partitions, graph):
             logging.warning("The assignments file doesn't contain the same number of lines than the number of nodes in the graph")
         # Hide partitions according to show_partitions list
         if show_partitions:
-            hidden_partitions = list(set(assignments) - set(show_partitions + [-1]))
+            hidden_partitions = list(set(assignments.values()) - set(show_partitions + [-1]))
             logging.info("Filtering out partitions %s not in show-partitions list %s", hidden_partitions, show_partitions)
-            assignments = [a if a in show_partitions else -1 for a in assignments]
+            assignments = {k:(a if a in show_partitions else -1) for k,a in assignments.items()}
     else:
         # Add all nodes to a single partition
-        assignments = [0] * nx.number_of_nodes(graph)
+        assignments = {v+1:0 for v in xrange(nx.number_of_nodes(graph))}
     return assignments
 
-def get_node_order(order_file, order_seed, graph):
+def get_node_order(order_file, order_seed, total_node_count, sub_graphs, assignments):
+    ''' Return ordered list of node IDs '''
     if order_file:
         # Extracting node order from file
         node_order = file_io.read_order_file(order_file)
         logging.info("%d node orders were found", len(node_order))
-        if len(node_order) != nx.number_of_nodes(graph):
+        if len(node_order) != total_node_count:
             logging.warning("The node order file doesn't contain the same number of lines than the number of nodes in the graph")
     else:
         # Generate random order
-        node_order = list(range(nx.number_of_nodes(graph)))
+        node_order = list(range(1, total_node_count + 1)) # 1 to n
         random.seed(order_seed)
         random.shuffle(node_order)
+
+    # Filter node_order with assignment list
+    for node in node_order:
+        if assignments[node] == -1:
+            node_order.remove(node)
+
+    # Get hidden nodes
+    hidden_nodes = []
+    for sub_graph in sub_graphs:
+        for node in sub_graph.nodes():
+            if 'hidden' in sub_graph.nodes[node]:
+                hidden_nodes.append((node, sub_graph.nodes[node]['connect']))
+
+    # Add hidden nodes to node_order list
+    for hidden_node, connected_node in hidden_nodes:
+        hidden_node_index = max(node_order.index(connected_node[0]), node_order.index(connected_node[1])) + 1
+        node_order.insert(hidden_node_index, hidden_node)
+
+    # Add order as node attribute
+    for sub_graph in sub_graphs:
+        for node in sub_graph.nodes():
+            sub_graph.nodes[node]['order'] = node_order.index(node) + 1 # order starts at 1
+
     return node_order
 
 def filter_node_order_on_assignments(node_order, assignments):
     ''' Return global node order with excluded nodes marked as -1 '''
     sorted_node_indexes = sorted(range(len(node_order)), key=lambda k: node_order[k]) # sorted node indexes
     current_node_order = 1 # node order starts at 1
-    filtered_node_order= [-1] * len(node_order)
-    for node_index in sorted_node_indexes:
-        if assignments[node_index] != -1:
-            filtered_node_order[node_index] = current_node_order # mark valid node with its order
+    filtered_node_order = {}
+    for node in node_order:
+        if assignments[node] != -1:
+            filtered_node_order[node] = current_node_order # mark valid node with its order
             current_node_order +=1
         else:
-            filtered_node_order[node_index] = -1 # mark excluded node (assignment = -1) as -1
+            filtered_node_order[node] = -1 # mark excluded node (assignment = -1) as -1
     return filtered_node_order
 
 def split_graph(input_graph, assignments, partitions):
-    return graph.create_sub_graphs(input_graph, partitions, assignments)
+    # Split graph by partitions
+    sub_graphs = graph.create_sub_graphs(input_graph, partitions, assignments)
+    # Add cut edges
+    cut_edges = get_cut_edges(input_graph, sub_graphs)
+    for sub_graph in sub_graphs:
+        partition = sub_graph.graph['partition']
+        sub_graph_cut_edges = [edge for edge in cut_edges if is_edge_connected_to_graph(edge, sub_graph)]
+        for edge in sub_graph_cut_edges:
+            if edge[0] not in sub_graph.nodes():
+                external_node = edge[0]
+                new_node = edge[0] * 100000 + partition # add partition to node ID to avoid collisions between partitions
+                existing_node = edge[1]
+            elif edge[1] not in sub_graph.nodes():
+                external_node = edge[1]
+                new_node = edge[1] * 100000 + partition
+                existing_node = edge[0]
+            sub_graph.add_node(new_node, hidden=1)
+            # add hidden_node attribute to link existing node to hidden node
+            if 'hidden_nodes' in sub_graph.nodes[existing_node]:
+                sub_graph.nodes[existing_node]['hidden_nodes'].append(new_node) # append node to hidden_nodes attribute
+            else:
+                sub_graph.nodes[existing_node]['hidden_nodes'] = [new_node]
+            # add partition and connect attributes
+            sub_graph.nodes[new_node]['partition'] = sub_graph.nodes[existing_node]['partition']
+            sub_graph.nodes[new_node]['connect'] = [existing_node, external_node] # add attribute with the 2 nodes from different partitions that the hidden edge is connecting
+            # add edge between existing and new nodes
+            sub_graph.add_edge(existing_node, new_node)
+            # insert nodes into assignments
+            assignments[new_node] = assignments[existing_node]
+    return sub_graphs
+
+def is_edge_connected_to_graph(edge, graph):
+    return edge[0] in graph.nodes() or edge[1] in graph.nodes()
+
+def is_edge_in_list(edge, edge_list):
+    return edge in edge_list or (edge[1], edge[0]) in edge_list # try both permutations
+
+def get_cut_edges(input_graph, sub_graphs):
+    sub_graph_edges = list(itertools.chain.from_iterable([sub_graph.edges() for sub_graph in sub_graphs]))
+    sub_graph_nodes = list(itertools.chain.from_iterable([sub_graph.nodes() for sub_graph in sub_graphs]))
+    cut_edges = [edge for edge in input_graph.edges()
+                    if edge[0] in sub_graph_nodes
+                    and edge[1] in sub_graph_nodes
+                    and not is_edge_in_list(edge, sub_graph_edges)]
+    return cut_edges
 
 def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_size):
     if node_size_mode == 'centrality':
@@ -299,7 +369,7 @@ def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_
     return size_per_node
 
 def get_frames_per_node_per_graph(sub_graphs, assignments, partitions):
-    filtered_assignments = [a for a in assignments if a != -1]
+    filtered_assignments = [a for a in assignments.values() if a != -1]
 
     frame_start_per_node_per_graph = []
     frame_count_per_node_per_graph = []
@@ -318,7 +388,7 @@ def get_frames_per_node_per_graph(sub_graphs, assignments, partitions):
     return frame_start_per_node_per_graph, frame_count_per_node_per_graph
 
 def get_partitions(assignments):
-    unique_assignments = set(assignments)
+    unique_assignments = set(assignments.values())
     try:
         unique_assignments.remove(-1) # remove '-1' (node to be excluded)
     except KeyError:
@@ -328,8 +398,8 @@ def get_partitions(assignments):
 def log_partitions_info(partitions, assignments):
     logging.info("Found %d partitions in the assignments", len(partitions))
     for partition in partitions:
-        logging.info("[Partition %d contains %d nodes]", partition, len([p for p in assignments if p == partition]))
-    logging.info("[Number of nodes excluded: %d]", len([p for p in assignments if p == -1]))
+        logging.info("[Partition %d contains %d nodes]", partition, len([p for n,p in assignments.items() if p == partition]))
+    logging.info("[Number of nodes excluded: %d]", len([p for n,p in assignments.items() if p == -1]))
 
 def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, seed, force, attraction, repulsion, size_per_node, node_size_mode, shadow_color, edge_size, label_size, label_type, width, height, frame_start_per_node_per_graph, frame_count_per_node_per_graph):
     for index, sub_graph in enumerate(sub_graphs):
@@ -338,13 +408,20 @@ def generate_layouts(sub_graphs, output_dir, node_order, assignments, layout, se
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True)
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
 
+def filter_visible_graph(graph):
+    visibe_nodes = [node for node in graph.nodes() if not 'hidden' in graph.nodes[node]]
+    return graph.subgraph(visibe_nodes)
+
 def perform_clustering(sub_graphs, output_dir, clustering, oslom2_dir, infomap_dir, cluster_seed, infomap_calls):
     clusters_per_node_per_graph = []
     for index, sub_graph in enumerate(sub_graphs):
         logging.info("Performing clustering (%s) on sub-graph %d", clustering, index)
-        clusters_per_node = run_clustering(output_dir, clustering, sub_graph, index, oslom2_dir, infomap_dir, cluster_seed, infomap_calls)
+
+        sub_graph_without_hidden_nodes = filter_visible_graph(sub_graph)
+
+        clusters_per_node = run_clustering(output_dir, clustering, sub_graph_without_hidden_nodes, index, oslom2_dir, infomap_dir, cluster_seed, infomap_calls)
         if clustering != 'graphviz': # clustering done directly by graphviz
-            cluster.create_cluster_for_homeless_nodes(sub_graph, clusters_per_node) # add homeless nodes cluster
+            cluster.create_cluster_for_homeless_nodes(sub_graph_without_hidden_nodes, clusters_per_node) # add homeless nodes cluster
         clusters_per_node_per_graph.append(clusters_per_node)
     return clusters_per_node_per_graph
 
@@ -390,7 +467,8 @@ def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, cluste
 
         # Merge sub-graphs for gvmap
         merged_graph_dot_filepath = os.path.join(output_dir, 'merged_graph.dot')
-        graph.merge_graphs(sub_graphs, merged_graph_dot_filepath)
+        visible_sub_graphs = [filter_visible_graph(sub_graph) for sub_graph in sub_graphs]
+        graph.merge_graphs(visible_sub_graphs, merged_graph_dot_filepath)
 
         # Color nodes with gvmap
         gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath, gvmap_dir)
@@ -468,7 +546,7 @@ def create_svg_tiles(svg_tiles, output_svg_file, width, height, border_size, col
        *svg_objects
        ).save(output_svg_file)
 
-def combine_images_into_tiles(output, assignments, node_order, partitions, border_size, width, height):
+def combine_images_into_tiles(output, partitions, border_size, width, height):
     logging.info("Combining images into tiles")
     partitions_count = len(partitions)
 
@@ -478,28 +556,24 @@ def combine_images_into_tiles(output, assignments, node_order, partitions, borde
         path_glob = os.path.join(output, 'frames_partition', 'p{}_*_new.png'.format(p))
         frames[p] = sorted(glob.glob(path_glob))
 
+    frame_count = max([len(frames[p]) for p in frames]) # max number of frames per partition
+
     # create output folder
     path_joined = os.path.join(output, 'frames_joined')
     if not os.path.exists(path_joined):
         os.makedirs(path_joined)
-
-    # sort assignments according to node_order
-    sorted_assignments = [a for _,a in sorted(zip(node_order, assignments))]
 
     # compute number of rows and columns
     columns = math.ceil(math.sqrt(partitions_count))
 
     # insert white frames at the start to get the same number of frames per partition
     for p in range(0, partitions_count):
-        frames[p] = ['frame_blank.png'] * (len([a for a in sorted_assignments if a != -1]) - len(frames[p])) + frames[p]
+        frames[p] = ['frame_blank.png'] * (frame_count - len(frames[p])) + frames[p]
 
     frame_files_png = []
     frame_files_svg = []
     f = 0
-    for a in sorted_assignments:
-        if a == -1:
-            continue # skip excluded nodes (assignment = -1)
-
+    for _ in xrange(frame_count):
         try:
             # get all tiles for current frame (one tile per partition)
             tiles = [frames[p][f] for p in range(0, partitions_count)]

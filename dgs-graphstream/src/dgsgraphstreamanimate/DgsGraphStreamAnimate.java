@@ -335,19 +335,21 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
                         int frameStart = this.nodeFrameStart.get(node.getId());
                         int frameOffset = lastNodeFrameStart - frameStart + c; // frame offset
 
-                        // Node size
                         int size = this.nodeSize.get(node.getId());
-                        if (frameOffset < this.highlightedFrameCount - 1) {
-                            float multiplier = this.highlightSizeMin + ((float)(this.highlightedFrameCount - frameOffset) / (this.highlightedFrameCount)) * (this.highlightSizeMax - this.highlightSizeMin);
-                            node.setAttribute("ui.size", (int)(size * multiplier)); // set highlighted size
-                        } else {
-                            node.setAttribute("ui.size", size); // reset size to normal size (node no longer highlighted)
-                        }
-                        // Node shadow
-                        if (frameOffset < this.highlightedFrameCount - 1) {
-                            node.setAttribute("ui.class", "shadow"); // add shadow
-                        } else {
-                            node.removeAttribute("ui.class"); // remove shadow (node no longer highlighted)
+                        if (size > 0) { // Do not highlight hidden nodes
+                            // Node size
+                            if (frameOffset < this.highlightedFrameCount - 1) {
+                                float multiplier = this.highlightSizeMin + ((float)(this.highlightedFrameCount - frameOffset) / (this.highlightedFrameCount)) * (this.highlightSizeMax - this.highlightSizeMin);
+                                node.setAttribute("ui.size", (int)(size * multiplier)); // set highlighted size
+                            } else {
+                                node.setAttribute("ui.size", size); // reset size to normal size (node no longer highlighted)
+                            }
+                            // Node shadow
+                            if (frameOffset < this.highlightedFrameCount - 1) {
+                                node.setAttribute("ui.class", "shadow"); // add shadow
+                            } else {
+                                node.removeAttribute("ui.class"); // remove shadow (node no longer highlighted)
+                            }
                         }
                     }
                 }

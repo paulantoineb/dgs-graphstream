@@ -67,6 +67,6 @@ def get_colors_per_node_global(color_per_node, clusters_per_node_per_graph):
 
 def add_colors_to_partition_graphs(colors_per_node, sub_graphs):  
     for sub_graph in sub_graphs:
-        node_ids = sub_graph.nodes()
-        filtered_colors_per_node = { node_id: colors_per_node[node_id] for node_id in node_ids }
-        nx.set_node_attributes(sub_graph, name='fillcolor', values=filtered_colors_per_node)
+        for node in sub_graph.nodes():
+            color = colors_per_node[node] if node in colors_per_node else 'black' # hidden nodes are black
+            sub_graph.nodes[node]['fillcolor'] = color
