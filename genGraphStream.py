@@ -199,7 +199,7 @@ def run(args, config):
 
     # Split graph into sub-graphs (one per partition)
     sub_graphs = split_graph(input_graph, assignments, partitions)
-    
+
     # Add cut edges to graph
     if args.show_cut_edges:
         add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments)
@@ -258,7 +258,7 @@ def get_assignments(assignments_file, show_partitions, graph):
         # Add all nodes to a single partition
         assignments = {v+1:0 for v in xrange(nx.number_of_nodes(graph))}
     return assignments
-    
+
 def get_hidden_nodes(sub_graphs):
     hidden_nodes = []
     for sub_graph in sub_graphs:
@@ -300,7 +300,7 @@ def get_node_order(order_file, order_seed, total_node_count, sub_graphs, assignm
             sub_graph.nodes[node]['order'] = node_order.index(node) + 1 # order starts at 1
 
     return node_order
-    
+
 def get_internal_external_nodes(edge, graph):
     if edge[0] not in graph.nodes():
         external_node = edge[0] # node from another partition
@@ -312,7 +312,7 @@ def get_internal_external_nodes(edge, graph):
         external_node = -1
         internal_node = -1
     return internal_node, external_node
-    
+
 def add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments):
     # Get cut edges
     cut_edges = get_cut_edges(input_graph, sub_graphs)

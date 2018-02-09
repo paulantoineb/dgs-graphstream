@@ -175,19 +175,18 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr, size_per_
         for index, n in enumerate(sorted_nodes):
             node_id = n[0]
 
+            # Color
+            color = 'black'
             if 'hidden' in n[1]:
                 if 'connect' in n[1]: 
                     connected_nodes = n[1]['connect']
                     connected_node = connected_nodes[0] if connected_nodes[0] in graph.nodes() else connected_nodes[1]
                     if colour_attr in graph.nodes[connected_node]:
                         color = graph.nodes[connected_node][colour_attr] # give hidden node the color of its first connected node
-                    else:
-                        color = 'black'
             elif colour_attr in n[1]:
                 color = n[1][colour_attr] # get color(s) from attributes
-            else:
-                color = 'black'
 
+            # Label
             if 'hidden' in n[1]:
                 label = '' # label of hidden nodes
             elif label_type == 'id':
@@ -195,9 +194,13 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr, size_per_
             else:
                 label = n[1]['order'] # starts at 1
             
+            # Size
             node_size = size_per_node[node_id] if node_id in size_per_node else 0 # size of hidden nodes
             
-            outf.write("an {} c='{}' l='{}' s='{}' fs='{}' fc='{}'\n".format(node_id, color, label, node_size, partition_frame_start[index], partition_frame_count[index]))
+            # Hidden
+            hidden = 1 if 'hidden' in n[1] else 0
+            
+            outf.write("an {} c='{}' l='{}' s='{}' fs='{}' fc='{}' hidden='{}'\n".format(node_id, color, label, node_size, partition_frame_start[index], partition_frame_count[index], hidden))
             nodes_added += [node_id]
 
             for e in graph.edges(node_id):

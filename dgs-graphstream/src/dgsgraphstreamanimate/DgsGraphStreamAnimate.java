@@ -6,8 +6,10 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Iterator;
 import java.util.Random;
 import java.lang.reflect.Field;
+import java.lang.Math;
 import org.graphstream.graph.Node;
 import org.graphstream.graph.Edge;
 import org.graphstream.graph.implementations.DefaultGraph;
@@ -30,6 +32,8 @@ import org.graphstream.ui.view.Viewer;
 import org.graphstream.ui.j2dviewer.J2DGraphRenderer;
 import org.graphstream.ui.graphicGraph.GraphicGraph;
 import org.graphstream.ui.graphicGraph.GraphicNode;
+import org.graphstream.ui.graphicGraph.GraphicEdge;
+import org.graphstream.ui.graphicGraph.stylesheet.StyleConstants;
 
 /**
  *
@@ -56,6 +60,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     private int highlightedFrameCount; // Number of frames during which a node is highlighted
     private int highlightSizeMin; // Min size multiplier for highlighted nodes
     private int highlightSizeMax; // Max size multiplier for highlighted nodes
+    private int cutEdgeLength; // Length of cut edges
 
     private enum LayoutType {
         LinLog,
@@ -100,6 +105,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         this.highlightedFrameCount = 4;
         this.highlightSizeMin = 1;
         this.highlightSizeMax = 3;
+        this.cutEdgeLength = 40;
 
 
         layout = CreateLayout(layout_type, seed, force, a, r, theta);
@@ -289,6 +295,11 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         } else if (attribute.equals("fc")) { // frame count
             int count = Integer.parseInt(newValue.toString());
             this.nodeFrameCount.put(nodeId, count);
+        } else if (attribute.equals("hidden")) { // hidden node status
+            int hidden = Integer.parseInt(newValue.toString());
+            if (hidden == 0) {
+                n.removeAttribute("hidden");
+            }
         }
     }
 
@@ -320,6 +331,42 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         }
     }
 
+    private void setEdgeLength(GraphicEdge edge, double length) throws NoSuchFieldException, IllegalAccessException {
+        GraphicNode source = edge.getSourceNode();
+        GraphicNode target = edge.getTargetNode();
+
+        // Convert edge length to graph unit
+        double d = getGraphRenderer(fsi).getCamera().getMetrics().lengthToGu( length, StyleConstants.Units.PX );
+        // Compute (source,target) vector
+        double vx = target.getX() - source.getX();
+        double vy = target.getY() - source.getY();
+        // Put target node a distance d from the source node along the (source,target) vector
+        double q = Math.sqrt(Math.pow(vx, 2) + Math.pow(vy, 2));
+        double nx = source.getX() + d * vx / q;
+        double ny = source.getY() + d * vy / q;
+
+        // Move target node to new position
+        target.move(nx, ny, target.getZ());
+    }
+
+    private void changeCutEdgesLength() {
+        try {
+            GraphicGraph graphicGraph = getGraphicGraph(fsi);
+            for (Node node : graphicGraph) {
+                Node n = this.g.getNode(node.getId());
+                if (n.hasAttribute("hidden")) {
+                    Iterator<GraphicEdge> iE = node.getEdgeIterator();
+                    while (iE.hasNext()) {
+                        setEdgeLength(iE.next(), this.cutEdgeLength); // hidden edge
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
     public void stepBegins(String sourceId, long timeId, double step) {
         int lastNodeId = this.addedNodes.size() - 1;
         Node lastNode = this.g.getNode(this.addedNodes.get(lastNodeId)); // get last added node n
@@ -335,9 +382,9 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
                         int frameStart = this.nodeFrameStart.get(node.getId());
                         int frameOffset = lastNodeFrameStart - frameStart + c; // frame offset
 
-                        int size = this.nodeSize.get(node.getId());
-                        if (size > 0) { // Do not highlight hidden nodes
+                        if (!node.hasAttribute("hidden")) {// do not highlight hidden nodes
                             // Node size
+                            int size = this.nodeSize.get(node.getId());
                             if (frameOffset < this.highlightedFrameCount - 1) {
                                 float multiplier = this.highlightSizeMin + ((float)(this.highlightedFrameCount - frameOffset) / (this.highlightedFrameCount)) * (this.highlightSizeMax - this.highlightSizeMin);
                                 node.setAttribute("ui.size", (int)(size * multiplier)); // set highlighted size
@@ -356,6 +403,9 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             }
 
             layout.compute(); // recompute layout
+
+            changeCutEdgesLength();
+
             if (mode == Mode.Images) {
                 takeScreenshot(frameIndex, "svg"); // export svg file
                 takeScreenshot(frameIndex, "png"); // export png file
