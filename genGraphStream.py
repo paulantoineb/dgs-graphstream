@@ -34,7 +34,7 @@ def parse_arguments():
  
     # Required arguments
     required_group = parent_parser.add_argument_group('required arguments')
-    required_group.add_argument('-g', '--graph',
+    required_group.add_argument('-g', '--graph', required=True,
                         help='input graph file')
     required_group.add_argument('-f', '--format', choices=['metis', 'edgelist'], required=True,
                         help='format of the input graph file')
@@ -77,14 +77,14 @@ def parse_arguments():
                         help='color of the shadow to use for highlighted nodes. Use with --node-size-mode highlight-new')
     # Image style
     styling_group = parent_parser.add_argument_group('image options')
-    styling_group.add_argument('--node-size-mode', choices=['fixed','centrality', 'highlight-new'], default='fixed',
+    styling_group.add_argument('--node-size-mode', choices=['fixed', 'centrality', 'highlight-new'], default='fixed',
                         help='node size mode')
     styling_group.add_argument('--node-size', type=int, metavar='S',
                         help='node size in pixels (default=10). Use with --node-size-mode fixed.')
     styling_group.add_argument('--min-node-size', type=int, metavar='S',
                         help='minimum node size in pixels (default=10). Use with --node-size-mode centrality or highlight-new.')
     styling_group.add_argument('--max-node-size', type=int, metavar='S',
-                        help='maximum node size in pixels (default=30). Use with --node-size-mode centrality or highlight-new.')
+                        help='maximum node size in pixels (default=40). Use with --node-size-mode centrality or highlight-new.')
     styling_group.add_argument('--edge-size', type=int, default=1, metavar='S',
                         help='edge size in pixels (default=1)')
     styling_group.add_argument('--label-size', type=int, default=10, metavar='S',
@@ -102,15 +102,16 @@ def parse_arguments():
     video_group.add_argument('--video',
                         help='output video file with tiled frames')
     video_group.add_argument('--fps', type=int,
-                        help='frames per second (default=4)')
+                        help='frames per second (default=8)')
     # Pdf
     pdf_group = parent_parser.add_argument_group('pdf options')
     pdf_group.add_argument('--pdf', type=int, default=20, metavar='P',
                         help='Percentage of frames to convert to pdf (default=20)')
     
     # Sub-commands
-    parser = argparse.ArgumentParser(add_help=False) 
+    parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='scheme', help='select scheme to highlight either communities or cut edges')
+    subparsers.required = True
     parser_communities = subparsers.add_parser('communities', parents = [parent_parser],
                                       help='highlight communities')
     parser_cut_edges = subparsers.add_parser('cut-edges', parents = [parent_parser],
@@ -128,7 +129,7 @@ def parse_arguments():
     # Cut edges
     parser_cut_edges.add_argument('--cut-edge-length', type=int, default=0, metavar='L',
                         help='length of cut edges (default=variable)')
-    parser_cut_edges.add_argument('--cut-edge-node-size', default=10, metavar='S',
+    parser_cut_edges.add_argument('--cut-edge-node-size', default=5, metavar='S',
                         help='size of the nodes attached to cut edges (default=10)')
 
     return parser.parse_args()
@@ -169,13 +170,13 @@ def validate_arguments(args):
 
     # Set default values
     if not args.fps:
-        args.fps = 4
+        args.fps = 8
     if not args.node_size:
         args.node_size = 10
     if not args.min_node_size:
-        args.max_node_size = 10
+        args.min_node_size = 10
     if not args.min_node_size:
-        args.max_node_size = 30
+        args.max_node_size = 40
     if args.scheme == 'communities':
         if not args.cluster_seed:
             args.cluster_seed = utils.get_random_seed()
