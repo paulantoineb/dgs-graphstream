@@ -154,7 +154,7 @@ def get_frame_start_and_count(full_graph, partition):
     partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values    
     return partition_frame_start, partition_frame_count
 
-def write_dgs_file(output, graph, full_graph, label_type, colour_attr, size_per_node):
+def write_dgs_file(output, graph, full_graph, label_type, colour_attr):
     partition = graph.graph['partition']
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
@@ -175,30 +175,25 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr, size_per_
         for index, n in enumerate(sorted_nodes):
             node_id = n[0]
 
+            # Hidden
+            hidden = 1 if 'hidden' in n[1] else 0
+            
             # Color
             color = 'black'
-            if 'hidden' in n[1]:
-                if 'connect' in n[1]: 
-                    connected_nodes = n[1]['connect']
-                    connected_node = connected_nodes[0] if connected_nodes[0] in graph.nodes() else connected_nodes[1]
-                    if colour_attr in graph.nodes[connected_node]:
-                        color = graph.nodes[connected_node][colour_attr] # give hidden node the color of its first connected node
-            elif colour_attr in n[1]:
+            if colour_attr in n[1]:
                 color = n[1][colour_attr] # get color(s) from attributes
 
             # Label
-            if 'hidden' in n[1]:
-                label = '' # label of hidden nodes
+            label = ''
+            if hidden:
+                label = '' # hide label for hidden nodes
             elif label_type == 'id':
                 label = node_id
-            else:
-                label = n[1]['order'] # starts at 1
+            elif label_type == 'order':
+                label = n[1]['order']
             
             # Size
-            node_size = size_per_node[node_id] if node_id in size_per_node else 0 # size of hidden nodes
-            
-            # Hidden
-            hidden = 1 if 'hidden' in n[1] else 0
+            node_size = n[1]['size']
             
             outf.write("an {} c='{}' l='{}' s='{}' fs='{}' fc='{}' hidden='{}'\n".format(node_id, color, label, node_size, partition_frame_start[index], partition_frame_count[index], hidden))
             nodes_added += [node_id]

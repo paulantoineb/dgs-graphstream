@@ -28,11 +28,12 @@ def get_colors_per_node(color_per_node, clusters_per_node):
         colors_per_node[node] = ','.join([c.strip('"') for c in colors])
     return colors_per_node
 
-def color_nodes_with_gvmap(output_dir, seed, dot_filepath, gvmap_dir):
+def color_nodes_with_gvmap(output_dir, color_scheme, seed, dot_filepath, gvmap_dir):
     output_dot_filename = os.path.join(output_dir, 'gvmap.dot')
     logging.info("Coloring graph %s using gvmap and writing dot file %s", dot_filepath, output_dot_filename)
     gvmap_bin = os.path.join(gvmap_dir, "gvmap")
-    args = [gvmap_bin, '-e', '-w', '-d', str(seed), dot_filepath] # "-w option is only available with this graphviz fork https://gitlab.com/paulantoineb/graphviz
+    scheme = 5 if color_scheme == 'primary-colors' else 1 # 1: pastel, 5: primary colors
+    args = [gvmap_bin, '-e', '-w', '-c', str(scheme), '-d', str(seed), dot_filepath] # "-w option is only available with this graphviz fork https://gitlab.com/paulantoineb/graphviz
     logging.debug("gvmap command: %s", ' '.join(args))
     output_file = open(output_dot_filename, "w")
     retval = subprocess.call(
@@ -68,5 +69,5 @@ def get_colors_per_node_global(color_per_node, clusters_per_node_per_graph):
 def add_colors_to_partition_graphs(colors_per_node, sub_graphs):  
     for sub_graph in sub_graphs:
         for node in sub_graph.nodes():
-            color = colors_per_node[node] if node in colors_per_node else 'black' # hidden nodes are black
-            sub_graph.nodes[node]['fillcolor'] = color
+            if node in colors_per_node:
+                sub_graph.nodes[node]['fillcolor'] = colors_per_node[node]

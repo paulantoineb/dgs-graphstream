@@ -26,21 +26,22 @@ import utils
 DGSGS_JAR = 'dgs-graphstream/dist/dgs-graphstream.jar'
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description=
+    parent_parser = argparse.ArgumentParser(add_help=False, description=
         '''Create animation of network partition assignments. First processes
         network file and assignments into DGS file format, then uses
         GraphStream to animate each frame, finally frames are stitched together.'''
     )
+ 
     # Required arguments
-    required_group = parser.add_argument_group('required arguments')
-    required_group.add_argument('graph',
+    required_group = parent_parser.add_argument_group('required arguments')
+    required_group.add_argument('-g', '--graph',
                         help='input graph file')
     required_group.add_argument('-f', '--format', choices=['metis', 'edgelist'], required=True,
                         help='format of the input graph file')
     required_group.add_argument('-o', '--output_dir', required=True,
                         help='output directory')
     # Input/output files
-    io_group = parser.add_argument_group('input/outputs options')
+    io_group = parent_parser.add_argument_group('input/outputs options')
     io_group.add_argument('-a', '--assignments',
                         help='partition assignments list')
     io_group.add_argument('--show-partitions', nargs='+', type=int,
@@ -50,16 +51,9 @@ def parse_arguments():
                         help='node order list')
     order_group.add_argument('--order-seed',
                         help='seed for ordering nodes')
-    # Clustering
-    clustering_group = parser.add_argument_group('clustering options')
-    clustering_group.add_argument('--clustering', '-c', choices=['oslom2','infomap','graphviz'], default='oslom2',
-                        help='clustering method')
-    clustering_group.add_argument('--cluster-seed', type=int, metavar='S',
-                        help='seed for clustering')
-    clustering_group.add_argument('--infomap-calls', type=int, metavar='C',
-                        help='number of times infomap is called within oslom2. Good values are between 1 and 10 (default=0)')
+
     # Layout
-    layout_group = parser.add_argument_group('layout options')
+    layout_group = parent_parser.add_argument_group('layout options')
     layout_group.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
                         help='graph layout')
     layout_group.add_argument('--layout-seed', type=int, default=utils.get_random_seed(), metavar='S',
@@ -71,16 +65,18 @@ def parse_arguments():
     layout_group.add_argument('--repulsion', type=float, metavar='R',
                         help='repulsion factor for linlog graph layout (default=-1.2)')
     # Coloring
-    coloring_group = parser.add_argument_group('coloring options')
+    coloring_group = parent_parser.add_argument_group('coloring options')
     color_mode_group = coloring_group.add_mutually_exclusive_group()
+    color_mode_group.add_argument('--color-scheme', choices=['primary-colors','pastel'], default='primary-colors',
+                        help='color scheme used by gvmap (default=primary-colors)')
     color_mode_group.add_argument('--node-color', metavar='C',
                         help='single color to use for all nodes')
-    color_mode_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
+    coloring_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
                         help='seed for coloring with gvmap')
     coloring_group.add_argument('--shadow-color', metavar='C',
                         help='color of the shadow to use for highlighted nodes. Use with --node-size-mode highlight-new')
     # Image style
-    styling_group = parser.add_argument_group('image options')
+    styling_group = parent_parser.add_argument_group('image options')
     styling_group.add_argument('--node-size-mode', choices=['fixed','centrality', 'highlight-new'], default='fixed',
                         help='node size mode')
     styling_group.add_argument('--node-size', type=int, metavar='S',
@@ -101,18 +97,39 @@ def parse_arguments():
                         help='image width (default=1280)')
     styling_group.add_argument('--height', type=int, default=720, metavar='H',
                         help='image height (default=720)')
-    styling_group.add_argument('--show-cut-edges', action='store_true',
-                        help='show edges that were cut by the partitioning')
     # Video
-    video_group = parser.add_argument_group('video options')
+    video_group = parent_parser.add_argument_group('video options')
     video_group.add_argument('--video',
                         help='output video file with tiled frames')
     video_group.add_argument('--fps', type=int,
                         help='frames per second (default=4)')
     # Pdf
-    pdf_group = parser.add_argument_group('pdf options')
+    pdf_group = parent_parser.add_argument_group('pdf options')
     pdf_group.add_argument('--pdf', type=int, default=20, metavar='P',
                         help='Percentage of frames to convert to pdf (default=20)')
+    
+    # Sub-commands
+    parser = argparse.ArgumentParser(add_help=False) 
+    subparsers = parser.add_subparsers(dest='scheme', help='select scheme to highlight either communities or cut edges')
+    parser_communities = subparsers.add_parser('communities', parents = [parent_parser],
+                                      help='highlight communities')
+    parser_cut_edges = subparsers.add_parser('cut-edges', parents = [parent_parser],
+                                      help='highlight cut edges')
+                                      
+    # Clustering
+    clustering_group = parser_communities.add_argument_group('clustering options')
+    clustering_group.add_argument('--clustering', '-c', choices=['oslom2','infomap','graphviz'], default='oslom2',
+                        help='clustering method')
+    clustering_group.add_argument('--cluster-seed', type=int, metavar='S',
+                        help='seed for clustering')
+    clustering_group.add_argument('--infomap-calls', type=int, metavar='C',
+                        help='number of times infomap is called within oslom2. Good values are between 1 and 10 (default=0)')
+                        
+    # Cut edges
+    parser_cut_edges.add_argument('--cut-edge-length', type=int, default=0, metavar='L',
+                        help='length of cut edges (default=variable)')
+    parser_cut_edges.add_argument('--cut-edge-node-size', default=10, metavar='S',
+                        help='size of the nodes attached to cut edges (default=10)')
 
     return parser.parse_args()
 
@@ -122,10 +139,11 @@ def validate_arguments(args):
     if args.show_partitions and not args.assignments:
         errors.append("The --show-partitions option is only available when a partition assignments list is provided")
     # Clustering
-    if args.clustering == 'graphviz' and args.cluster_seed:
-        errors.append("The --cluster-seed option is not available with the graphviz clustering method")
-    if args.clustering != 'oslom2' and args.infomap_calls:
-        errors.append("The --infomap-calls option is only available with the oslom2 clustering method")
+    if args.scheme == 'communities':
+        if args.clustering == 'graphviz' and args.cluster_seed:
+            errors.append("The --cluster-seed option is not available with the graphviz clustering method")
+        if args.clustering != 'oslom2' and args.infomap_calls:
+            errors.append("The --infomap-calls option is only available with the oslom2 clustering method")
     # Layout
     if args.layout != 'linlog' and args.force:
         errors.append("The --force option is only available with the linlog layout")
@@ -135,6 +153,7 @@ def validate_arguments(args):
         errors.append("The --repulsion option is only available with the linlog layout")
     if not args.video and args.fps:
         errors.append("The --fps option is only available with the --video option")
+    # Coloring
     # Image style
     if args.node_size and args.node_size_mode != 'fixed':
         errors.append("The --node-size option is only available with --node-size-mode fixed")
@@ -151,16 +170,17 @@ def validate_arguments(args):
     # Set default values
     if not args.fps:
         args.fps = 4
-    if not args.cluster_seed:
-        args.cluster_seed = utils.get_random_seed()
-    if not args.infomap_calls:
-        args.infomap_calls = 0
     if not args.node_size:
         args.node_size = 10
     if not args.min_node_size:
         args.max_node_size = 10
     if not args.min_node_size:
         args.max_node_size = 30
+    if args.scheme == 'communities':
+        if not args.cluster_seed:
+            args.cluster_seed = utils.get_random_seed()
+        if not args.infomap_calls:
+            args.infomap_calls = 0
 
 def parse_config_file(config_file):
     logging.debug("Reading the config file %s", config_file)
@@ -201,34 +221,44 @@ def run(args, config):
     sub_graphs = split_graph(input_graph, assignments, partitions)
 
     # Add cut edges to graph
-    if args.show_cut_edges:
-        add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments)
+    cut_edge_length = 0
+    if args.scheme == 'cut-edges':
+        cut_edge_length = args.cut_edge_length
+        add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments, args.cut_edge_node_size)
 
     # Read node order file
     filtered_node_order = get_node_order(args.order, args.order_seed, nx.number_of_nodes(input_graph), sub_graphs, assignments)
 
     # Get size per node
-    size_per_node = get_size_per_node(input_graph, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
+    get_size_per_node(input_graph, sub_graphs, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
 
     # Generate layout of each sub-graph
     generate_layouts(sub_graphs, nx.union_all(sub_graphs), args.output_dir, args.layout, args.layout_seed,
                      args.force, args.attraction, args.repulsion,
-                     size_per_node, args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, args.width, args.height)
+                     args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, cut_edge_length, args.width, args.height)
 
     # Perform clustering of each sub-graph
-    clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering,
-                                                     config['install_dirs']['oslom2'], config['install_dirs']['infomap'],
-                                                     args.cluster_seed, args.infomap_calls)
+    if args.scheme =='communities':
+        clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering,
+                                                         config['install_dirs']['oslom2'], config['install_dirs']['infomap'],
+                                                         args.cluster_seed, args.infomap_calls)
+        # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
+        cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
+        if args.clustering != 'graphviz':
+            cluster.add_clusters_to_graph(sub_graphs, clusters_per_node_per_graph) # cluster attributes must be omitted for gvmap to perform its own clustering
+    else: # cut edges
+        clusters_per_node_per_graph = cluster_nodes_per_partition(sub_graphs)
+        cluster.add_clusters_to_graph(sub_graphs, clusters_per_node_per_graph)
 
     # Perform coloring
-    perform_coloring(input_graph, sub_graphs, clusters_per_node_per_graph, args.clustering, args.output_dir, config['install_dirs']['gvmap'], args.node_color, args.color_seed)
+    perform_coloring(input_graph, sub_graphs, clusters_per_node_per_graph, args.output_dir, config['install_dirs']['gvmap'], args.node_color, args.color_scheme, args.color_seed)
 
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(args.output_dir, sub_graph, nx.union_all(sub_graphs), args.label_type, 'fillcolor', size_per_node)
+        dgs_file = file_io.write_dgs_file(args.output_dir, sub_graph, nx.union_all(sub_graphs), args.label_type, 'fillcolor')
         generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed,
                         args.force, args.attraction, args.repulsion,
-                        args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.width, args.height, 'images') # compute layout from dgs file and write images
+                        args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, cut_edge_length, args.width, args.height, 'images') # compute layout from dgs file and write images
 
     # Combine frames into tiles
     if args.video or args.pdf:
@@ -313,7 +343,7 @@ def get_internal_external_nodes(edge, graph):
         internal_node = -1
     return internal_node, external_node
 
-def add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments):
+def add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments, cut_edge_node_size):
     # Get cut edges
     cut_edges = get_cut_edges(input_graph, sub_graphs)
     # Add cut edges and hidden nodes to partition graphs
@@ -331,6 +361,8 @@ def add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments):
                 sub_graph.nodes[internal_node]['hidden_nodes'].append(new_node) # append node to hidden_nodes attribute
             else:
                 sub_graph.nodes[internal_node]['hidden_nodes'] = [new_node]
+            # add node size attribute
+            sub_graph.nodes[new_node]['size'] = cut_edge_node_size
             # add partition and connect attributes
             sub_graph.nodes[new_node]['partition'] = sub_graph.nodes[internal_node]['partition']
             sub_graph.nodes[new_node]['connect'] = [internal_node, external_node] # add attribute with the 2 nodes from different partitions that the hidden edge is connecting
@@ -357,7 +389,7 @@ def get_cut_edges(input_graph, sub_graphs):
                     and not is_edge_in_list(edge, sub_graph_edges)]
     return cut_edges
 
-def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_size):
+def get_size_per_node(graph, sub_graphs, node_size_mode, node_size, min_node_size, max_node_size):
     if node_size_mode == 'centrality':
         centrality_per_node = nx.degree_centrality(graph)
         min_centrality = min(centrality_per_node.values())
@@ -368,7 +400,12 @@ def get_size_per_node(graph, node_size_mode, node_size, min_node_size, max_node_
         size_per_node = {node:min_node_size for node in graph.nodes()}
     else: # fixed
         size_per_node = {node:node_size for node in graph.nodes()}
-    return size_per_node
+        
+    # Add size as node attribute
+    for sub_graph in sub_graphs:
+        for node in sub_graph.nodes():
+            if node in size_per_node:
+                sub_graph.nodes[node]['size'] = size_per_node[node]
 
 def get_partitions(assignments):
     unique_assignments = set(assignments.values())
@@ -385,10 +422,10 @@ def log_partitions_info(partitions, assignments):
     logging.info("[Number of nodes included: %d]", len([p for _,p in assignments.items() if p != -1]))
     logging.info("[Number of nodes excluded: %d]", len([p for _,p in assignments.items() if p == -1]))
 
-def generate_layouts(sub_graphs, full_graph, output_dir, layout, seed, force, attraction, repulsion, size_per_node, node_size_mode, shadow_color, edge_size, label_size, label_type, width, height):
+def generate_layouts(sub_graphs, full_graph, output_dir, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, label_type, cut_edge_length, width, height):
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(output_dir, sub_graph, full_graph, label_type, None, size_per_node)
-        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, width, height, 'dot') # compute layout from dgs file and write dot file
+        dgs_file = file_io.write_dgs_file(output_dir, sub_graph, full_graph, label_type, None)
+        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, cut_edge_length, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True)
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
 
@@ -429,17 +466,27 @@ def run_clustering(output, clustering_method, graph, graph_id, oslom2_dir, infom
         level = 1 # lowest hierarchy level
         clusters_per_node = file_io.read_infomap_tree_file(output_tree_file, level) # get cluster(s) from Infomap .tree file
     return clusters_per_node
+    
+def cluster_nodes_per_partition(sub_graphs):
+    full_graph_with_attributes = nx.union_all(sub_graphs)
+    clusters_per_node_per_graph = []
+    for sub_graph in sub_graphs:
+        clusters_per_node = {}
+        for node in sub_graph.nodes(data=True):
+            if 'hidden' in node[1]: # give hidden node the partition of the external node they represent
+                connected_nodes = node[1]['connect']
+                external_node = connected_nodes[1] if connected_nodes[0] in sub_graph.nodes() else connected_nodes[0]
+                partition = full_graph_with_attributes.nodes[external_node]['partition']
+            else:
+                partition = node[1]['partition']
+            clusters_per_node[node[0]] = [partition]
+        clusters_per_node_per_graph.append(clusters_per_node)
+    return clusters_per_node_per_graph
 
-def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, clustering, output_dir, gvmap_dir, node_color, color_seed):
+def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, output_dir, gvmap_dir, node_color, color_scheme, color_seed):
     if node_color:
         colors_per_node = {node:node_color for node in full_graph.nodes()}
     else:
-        if clustering != 'graphviz':
-            # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
-            cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
-            for index, clusters_per_node in enumerate(clusters_per_node_per_graph):
-                cluster.add_clusters_to_graph(sub_graphs[index], clusters_per_node)
-
         # Add width and height attributes (required by gvmap)
         for sub_graph in sub_graphs:
             attributes = {node:0.5 for node in sub_graph.nodes()}
@@ -451,11 +498,10 @@ def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, cluste
 
         # Merge sub-graphs for gvmap
         merged_graph_dot_filepath = os.path.join(output_dir, 'merged_graph.dot')
-        visible_sub_graphs = [filter_visible_graph(sub_graph) for sub_graph in sub_graphs]
-        graph.merge_graphs(visible_sub_graphs, merged_graph_dot_filepath)
+        graph.merge_graphs(sub_graphs, merged_graph_dot_filepath)
 
         # Color nodes with gvmap
-        gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_seed, merged_graph_dot_filepath, gvmap_dir)
+        gvmap_dot_file = color.color_nodes_with_gvmap(output_dir, color_scheme, color_seed, merged_graph_dot_filepath, gvmap_dir)
 
         # Extract colors from gvmap output and update partition graphs
         color_per_node = graph.get_node_attribute_from_dot_file(gvmap_dot_file, 'fillcolor', True, True)
@@ -464,7 +510,7 @@ def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, cluste
     # add colors to graphs
     color.add_colors_to_partition_graphs(colors_per_node, sub_graphs)
 
-def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mode, shadow_color, edge_size, label_size, width, height, mode):
+def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mode, shadow_color, edge_size, label_size, cut_edge_length, width, height, mode):
     output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
     out = os.path.join(output, 'frames_partition/p{}_'.format(p))
     if mode == 'dot':
@@ -473,7 +519,7 @@ def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mo
         logging.info("Generating graph images (%s) for DGS file %s", out, dgs_file)
     args = ['java', '-jar', DGSGS_JAR, '-dgs', dgs_file, '-out', out, '-layout', layout, '-seed', str(seed),
                     '-node_size_mode', node_size_mode, '-edge_size', str(edge_size), '-label_size', str(label_size),
-                    '-width', str(width), '-height', str(height),
+                    '-width', str(width), '-height', str(height), '-cut_edge_length', str(cut_edge_length),
                     '-mode', mode, '-dotfile', output_dot_filepath]
     if force:
         args += ['-force', str(force)]

@@ -79,7 +79,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
 
     private void AnimateDgs(String inputDGS, String outputDirectory, LayoutType layout_type, Mode mode, String outputDotFilepath,
                             long seed, float force, float a, float r, float theta,
-                            NodeSizeMode nodeSizeMode, String shadowColor, int edgeSize, int labelSize, int width, int height, Boolean display)
+                            NodeSizeMode nodeSizeMode, String shadowColor, int edgeSize, int labelSize, int width, int height, int cutEdgeLength, Boolean display)
             throws java.io.IOException {
 
         System.setProperty("org.graphstream.ui.renderer","org.graphstream.ui.j2dviewer.J2DGraphRenderer");
@@ -105,7 +105,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         this.highlightedFrameCount = 4;
         this.highlightSizeMin = 1;
         this.highlightSizeMax = 3;
-        this.cutEdgeLength = 40;
+        this.cutEdgeLength = cutEdgeLength;
 
 
         layout = CreateLayout(layout_type, seed, force, a, r, theta);
@@ -314,10 +314,10 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
     public void edgeAdded(String sourceId, long timeId, String edgeId,
             String fromNodeId, String toNodeId, boolean directed) {
         Edge e = this.g.getEdge(edgeId);
-        Node source_node = this.g.getNode(fromNodeId);
-        String style_attr = source_node.getAttribute("ui.style");
+        Node target_node = this.g.getNode(toNodeId);
+        String style_attr = target_node.getAttribute("ui.style");
         if (style_attr != null) {
-            e.setAttribute("ui.style", style_attr.split(";")[1] + ";");
+            e.setAttribute("ui.style", style_attr.split(";")[1] + ";"); // set edge color to be target node color
         }
         e.setAttribute("ui.size", this.edgeSize);
     }
@@ -404,7 +404,8 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
 
             layout.compute(); // recompute layout
 
-            changeCutEdgesLength();
+            if (this.cutEdgeLength > 0)
+                changeCutEdgesLength();
 
             if (mode == Mode.Images) {
                 takeScreenshot(frameIndex, "svg"); // export svg file
@@ -461,6 +462,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
             System.out.println("-edge_size <arg>        edge size");
             System.out.println("-width <arg>            image width");
             System.out.println("-height <arg>           image height");
+            System.out.println("-cut_edge_length <arg>  cut edge length");
             System.out.println("-mode <arg>             mode. options: [images|dot]. default: images");
             System.out.println("-dotfile <arg>          output dot file");
             System.out.println("-display screen         layout option to use. options: [screen]");
@@ -524,13 +526,17 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (params.containsKey("height")) {
             height = Integer.parseInt(params.get("height").get(0));
         }
+        int cutEdgeLength = 0; // default cut edge length (variable length)
+        if (params.containsKey("cut_edge_length")) {
+            cutEdgeLength = Integer.parseInt(params.get("cut_edge_length").get(0));
+        }
 
         try {
             System.out.println(params.get("dgs").get(0));
             DgsGraphStreamAnimate dgs = new DgsGraphStreamAnimate();
 
             dgs.AnimateDgs(params.get("dgs").get(0), params.get("out").get(0), layout_type, mode, params.get("dotfile").get(0),
-                           seed, force, a, r, theta, nodeSizeMode, shadowColor ,edgeSize, labelSize, width, height, display);
+                           seed, force, a, r, theta, nodeSizeMode, shadowColor ,edgeSize, labelSize, width, height, cutEdgeLength, display);
         } catch(IOException e) {
             e.printStackTrace();
         }

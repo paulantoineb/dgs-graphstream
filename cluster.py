@@ -9,14 +9,15 @@ import subprocess
 from graph import add_node_attribute_to_graph
 import utils
 
-def add_clusters_to_graph(graph, clusters_per_node):
-    # remove non-existent nodes from clusters_per_node dictionary
-    node_ids = [node for node in graph.nodes()]
-    utils.prune_invalid_keys_from_dictionary(node_ids, clusters_per_node)
+def add_clusters_to_graph(sub_graphs, clusters_per_node_per_graph):
+    for index, clusters_per_node in enumerate(clusters_per_node_per_graph):     
+        # remove non-existent nodes from clusters_per_node dictionary
+        node_ids = [node for node in sub_graphs[index].nodes()]
+        utils.prune_invalid_keys_from_dictionary(node_ids, clusters_per_node)
 
-    # add cluster attribute to dot file
-    first_cluster_per_node = {k:v[0] for k,v in clusters_per_node.items()} # gvmap only supports a single cluster per node
-    add_node_attribute_to_graph(graph, 'cluster', first_cluster_per_node)
+        # add cluster attribute to dot file
+        first_cluster_per_node = {k:v[0] for k,v in clusters_per_node.items()} # gvmap only supports a single cluster per node
+        add_node_attribute_to_graph(sub_graphs[index], 'cluster', first_cluster_per_node)
 
 def create_cluster_for_homeless_nodes(graph, clusters_per_node):
     max_cluster = get_max_cluster_value(clusters_per_node)
