@@ -335,15 +335,12 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         GraphicNode source = edge.getSourceNode();
         GraphicNode target = edge.getTargetNode();
 
-        // Convert edge length to graph unit
-        double d = getGraphRenderer(fsi).getCamera().getMetrics().lengthToGu( length, StyleConstants.Units.PX );
         // Compute (source,target) vector
         double vx = target.getX() - source.getX();
         double vy = target.getY() - source.getY();
-        // Put target node a distance d from the source node along the (source,target) vector
-        double q = Math.sqrt(Math.pow(vx, 2) + Math.pow(vy, 2));
-        double nx = source.getX() + d * vx / q;
-        double ny = source.getY() + d * vy / q;
+        // Put target node at given percentage along the (source,target) vector
+        double nx = source.getX() + vx * length / 100;
+        double ny = source.getY() + vy * length / 100;
 
         // Move target node to new position
         target.move(nx, ny, target.getZ());
@@ -526,7 +523,7 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         if (params.containsKey("height")) {
             height = Integer.parseInt(params.get("height").get(0));
         }
-        int cutEdgeLength = 0; // default cut edge length (variable length)
+        int cutEdgeLength = 100; // default cut edge length (100%)
         if (params.containsKey("cut_edge_length")) {
             cutEdgeLength = Integer.parseInt(params.get("cut_edge_length").get(0));
         }

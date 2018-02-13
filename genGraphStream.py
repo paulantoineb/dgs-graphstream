@@ -130,8 +130,8 @@ def parse_arguments():
                         help='number of times infomap is called within oslom2. Good values are between 1 and 10 (default=0)')
                         
     # Cut edges
-    parser_cut_edges.add_argument('--cut-edge-length', type=int, default=0, metavar='L',
-                        help='length of cut edges (default=variable)')
+    parser_cut_edges.add_argument('--cut-edge-length', type=int, default=50, metavar='L',
+                        help='length of cut edges as percentage of original length (default=50)')
     parser_cut_edges.add_argument('--cut-edge-node-size', default=5, metavar='S',
                         help='size of the nodes attached to cut edges (default=10)')
 
@@ -148,6 +148,10 @@ def validate_arguments(args):
             errors.append("The --cluster-seed option is not available with the graphviz clustering method")
         if args.clustering != 'oslom2' and args.infomap_calls:
             errors.append("The --infomap-calls option is only available with the oslom2 clustering method")
+    # Cut edges
+    if args.scheme == 'cut-edges':
+        if args.cut_edge_length < 0 or args.cut_edge_length > 100:
+            errors.append("The --cut-edge-length value must be between 0 and 100")
     # Layout
     if args.layout != 'linlog' and args.force:
         errors.append("The --force option is only available with the linlog layout")
