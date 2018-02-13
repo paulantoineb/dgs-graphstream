@@ -8,9 +8,10 @@ import subprocess
 
 from graph import add_node_attribute_to_graph
 import utils
+import networkx as nx
 
 def add_clusters_to_graph(sub_graphs, clusters_per_node_per_graph):
-    for index, clusters_per_node in enumerate(clusters_per_node_per_graph):     
+    for index, clusters_per_node in enumerate(clusters_per_node_per_graph):
         # remove non-existent nodes from clusters_per_node dictionary
         node_ids = [node for node in sub_graphs[index].nodes()]
         utils.prune_invalid_keys_from_dictionary(node_ids, clusters_per_node)
@@ -78,3 +79,19 @@ def run_infomap(output_directory, pajek_file, infomap_dir, cluster_seed):
     log_file = os.path.join(output_directory, "infomap.log")
     with open(log_file, "a") as logwriter:
         retval = subprocess.call(args, stdout=logwriter, stderr=subprocess.STDOUT)
+
+def cluster_nodes_per_partition(sub_graphs):
+    full_graph_with_attributes = nx.union_all(sub_graphs)
+    clusters_per_node_per_graph = []
+    for sub_graph in sub_graphs:
+        clusters_per_node = {}
+        for node in sub_graph.nodes(data=True):
+            if 'hidden' in node[1]: # give hidden node the partition of the external node they represent
+                connected_nodes = node[1]['connect']
+                external_node = connected_nodes[1] if connected_nodes[0] in sub_graph.nodes() else connected_nodes[0]
+                partition = full_graph_with_attributes.nodes[external_node]['partition']
+            else:
+                partition = node[1]['partition']
+            clusters_per_node[node[0]] = [partition]
+        clusters_per_node_per_graph.append(clusters_per_node)
+    return clusters_per_node_per_graph

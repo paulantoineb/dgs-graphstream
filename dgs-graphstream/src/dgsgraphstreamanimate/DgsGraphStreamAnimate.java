@@ -353,8 +353,10 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
                 Node n = this.g.getNode(node.getId());
                 if (n.hasAttribute("hidden")) {
                     Iterator<GraphicEdge> iE = node.getEdgeIterator();
-                    while (iE.hasNext()) {
-                        setEdgeLength(iE.next(), this.cutEdgeLength); // hidden edge
+                    if (iE != null) {
+                        while (iE.hasNext()) {
+                            setEdgeLength(iE.next(), this.cutEdgeLength); // hidden edge
+                        }
                     }
                 }
             }

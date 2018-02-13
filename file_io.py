@@ -144,14 +144,14 @@ def read_infomap_tree_file(filepath, level):
             line = next(file, None)
 
     return node_dict
-    
+
 def get_frame_start_and_count(full_graph, partition, trailing_frame_count):
     ''' Global frame start and count per node '''
     sorted_nodes = sorted(full_graph.nodes(data=True), key=lambda node: node[1]['order'])
     ordered_assignments = [node[1]['partition'] for node in sorted_nodes]
     partition_frame_start = [i for i, a in enumerate(ordered_assignments) if a == partition] # assignment start indexes for given partition
     partition_frame_start_extended = partition_frame_start + [len(sorted_nodes) + trailing_frame_count] # add last frame id with extra trailing frames to give highlighted nodes time to settle
-    partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values    
+    partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values
     return partition_frame_start, partition_frame_count
 
 def write_dgs_file(output, graph, full_graph, label_type, colour_attr, trailing_frame_count):
@@ -162,7 +162,7 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr, trailing_
     with open(filename, 'w') as outf:
         outf.write("DGS004\n")
         outf.write("partition_{} 0 0\n".format(partition))
- 
+
         # get partition start and count per node
         partition_frame_start, partition_frame_count = get_frame_start_and_count(full_graph, partition, trailing_frame_count)
         # sort nodes according to node_order
@@ -177,7 +177,7 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr, trailing_
 
             # Hidden
             hidden = 1 if 'hidden' in n[1] else 0
-            
+
             # Color
             color = 'black'
             if colour_attr in n[1]:
@@ -191,10 +191,10 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr, trailing_
                 label = node_id
             elif label_type == 'order':
                 label = n[1]['order']
-            
+
             # Size
             node_size = n[1]['size']
-            
+
             outf.write("an {} c='{}' l='{}' s='{}' fs='{}' fc='{}' hidden='{}'\n".format(node_id, color, label, node_size, partition_frame_start[index], partition_frame_count[index], hidden))
             nodes_added += [node_id]
 

@@ -65,9 +65,3 @@ def get_colors_per_node_global(color_per_node, clusters_per_node_per_graph):
         colors = [cluster_to_color[cluster] for cluster in clusters]
         colors_per_node[utils.to_int(node)] = ','.join([c.strip('"') for c in colors])
     return colors_per_node
-
-def add_colors_to_partition_graphs(colors_per_node, sub_graphs):  
-    for sub_graph in sub_graphs:
-        for node in sub_graph.nodes():
-            if node in colors_per_node:
-                sub_graph.nodes[node]['fillcolor'] = colors_per_node[node]

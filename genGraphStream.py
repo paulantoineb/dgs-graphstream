@@ -2,27 +2,20 @@
 
 import os
 import sys
-import glob
 import logging
 import argparse
 import configparser
 import subprocess
-import itertools
 import random
 import math
-import fpdf
-from svglib.svglib import svg2rlg
-from reportlab.graphics import renderPDF
-from svgutils.compose import *
 import networkx as nx
-from scipy import interpolate
-from PIL import Image
 
 import file_io
 import graph
 import color
 import cluster
 import utils
+import image
 
 DGSGS_JAR = 'dgs-graphstream/dist/dgs-graphstream.jar'
 
@@ -32,7 +25,7 @@ def parse_arguments():
         network file and assignments into DGS file format, then uses
         GraphStream to animate each frame, finally frames are stitched together.'''
     )
- 
+
     # Required arguments
     required_group = parent_parser.add_argument_group('required arguments')
     required_group.add_argument('-g', '--graph', required=True,
@@ -105,12 +98,12 @@ def parse_arguments():
     video_group.add_argument('--fps', type=int,
                         help='frames per second (default=8)')
     video_group.add_argument('--padding-time', type=float,
-                        help='padding time in seconds to add extra frames at the end of the video (default=2.0)')                    
+                        help='padding time in seconds to add extra frames at the end of the video (default=2.0)')
     # Pdf
     pdf_group = parent_parser.add_argument_group('pdf options')
     pdf_group.add_argument('--pdf', type=int, default=20, metavar='P',
                         help='Percentage of frames to convert to pdf (default=20)')
-    
+
     # Sub-commands
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='scheme', help='select scheme to highlight either communities or cut edges')
@@ -119,7 +112,7 @@ def parse_arguments():
                                       help='highlight communities')
     parser_cut_edges = subparsers.add_parser('cut-edges', parents = [parent_parser],
                                       help='highlight cut edges')
-                                      
+
     # Clustering
     clustering_group = parser_communities.add_argument_group('clustering options')
     clustering_group.add_argument('--clustering', '-c', choices=['oslom2','infomap','graphviz'], default='oslom2',
@@ -128,7 +121,7 @@ def parse_arguments():
                         help='seed for clustering')
     clustering_group.add_argument('--infomap-calls', type=int, metavar='C',
                         help='number of times infomap is called within oslom2. Good values are between 1 and 10 (default=0)')
-                        
+
     # Cut edges
     parser_cut_edges.add_argument('--cut-edge-length', type=int, default=50, metavar='L',
                         help='length of cut edges as percentage of original length (default=50)')
@@ -171,6 +164,7 @@ def validate_arguments(args):
     if args.max_node_size and args.node_size_mode == 'fixed':
         errors.append("The --max-node-size option is only available with --node-size-mode centrality or highlight-new")
 
+    # Print errors and exit if any error found
     if errors:
         for error in errors:
             logging.error(error)
@@ -192,6 +186,16 @@ def validate_arguments(args):
             args.cluster_seed = utils.get_random_seed()
         if not args.infomap_calls:
             args.infomap_calls = 0
+    if not 'clustering' in args:
+        args.clustering = None
+    if not 'cluster_seed' in args:
+        args.cluster_seed = 0
+    if not 'infomap_calls' in args:
+        args.infomap_calls = 0
+    if not 'cut_edge_length' in args:
+        args.cut_edge_length = 0
+    if not 'cut_edge_node_size' in args:
+        args.cut_edge_node_size = 0
 
 def parse_config_file(config_file):
     logging.debug("Reading the config file %s", config_file)
@@ -229,52 +233,28 @@ def run(args, config):
     log_partitions_info(partitions, assignments)
 
     # Split graph into sub-graphs (one per partition)
-    sub_graphs = split_graph(input_graph, assignments, partitions)
-
-    # Add cut edges to graph
-    cut_edge_length = 0
-    if args.scheme == 'cut-edges':
-        cut_edge_length = args.cut_edge_length
-        add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments, args.cut_edge_node_size)
-
-    # Read node order file
-    filtered_node_order = get_node_order(args.order, args.order_seed, nx.number_of_nodes(input_graph), sub_graphs, assignments)
-
-    # Get size per node
-    get_size_per_node(input_graph, sub_graphs, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
+    sub_graphs = split_graph(input_graph, assignments, partitions, args.scheme, args.order, args.order_seed, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size, args.cut_edge_node_size)
 
     # Generate layout of each sub-graph
     padding_frame_count = math.ceil(args.padding_time * args.fps)
-    generate_layouts(sub_graphs, nx.union_all(sub_graphs), args.output_dir, args.layout, args.layout_seed,
+    generate_layout_per_subgraph(sub_graphs, nx.union_all(sub_graphs), args.output_dir, args.layout, args.layout_seed,
                      args.force, args.attraction, args.repulsion,
-                     args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, cut_edge_length, args.width, args.height, padding_frame_count)
+                     args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, args.cut_edge_length, args.width, args.height, padding_frame_count)
 
     # Perform clustering of each sub-graph
-    if args.scheme =='communities':
-        clusters_per_node_per_graph = perform_clustering(sub_graphs, args.output_dir, args.clustering,
-                                                         config['install_dirs']['oslom2'], config['install_dirs']['infomap'],
-                                                         args.cluster_seed, args.infomap_calls)
-        # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
-        cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
-        if args.clustering != 'graphviz':
-            cluster.add_clusters_to_graph(sub_graphs, clusters_per_node_per_graph) # cluster attributes must be omitted for gvmap to perform its own clustering
-    else: # cut edges
-        clusters_per_node_per_graph = cluster_nodes_per_partition(sub_graphs)
-        cluster.add_clusters_to_graph(sub_graphs, clusters_per_node_per_graph)
+    clusters_per_node_per_graph = create_clusters(sub_graphs, args.output_dir, args.scheme, args.clustering, args.cluster_seed, args.infomap_calls)
 
     # Perform coloring
     perform_coloring(input_graph, sub_graphs, clusters_per_node_per_graph, args.output_dir, config['install_dirs']['gvmap'], args.node_color, args.color_scheme, args.color_seed)
 
     # Generate frames for each sub-graph
-    for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(args.output_dir, sub_graph, nx.union_all(sub_graphs), args.label_type, 'fillcolor', padding_frame_count)
-        generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed,
-                        args.force, args.attraction, args.repulsion,
-                        args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, cut_edge_length, args.width, args.height, 'images') # compute layout from dgs file and write images
+    create_dgs_file_and_generate_frames(args.output_dir, sub_graphs, nx.union_all(sub_graphs), args.label_type, 'fillcolor', padding_frame_count,
+                                        args.layout, args.layout_seed, args.force, args.attraction, args.repulsion, args.node_size_mode, args.shadow_color,
+                                        args.edge_size, args.label_size, args.cut_edge_length, args.width, args.height, 'images')
 
     # Combine frames into tiles
     if args.video or args.pdf:
-        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, partitions, args.border_size, args.width, args.height, args.fps)
+        frame_files_png, frame_files_svg = image.combine_images_into_tiles(args.output_dir, partitions, args.border_size, args.width, args.height, args.fps)
 
     # Convert frames to video
     if args.video:
@@ -282,7 +262,7 @@ def run(args, config):
 
     # Convert frames to pdfs
     if args.pdf:
-        create_pdfs_from_tiles(args.output_dir, frame_files_svg, args.pdf)
+        image.create_pdfs_from_tiles(args.output_dir, frame_files_svg, args.pdf)
 
 def get_assignments(assignments_file, show_partitions, graph):
     if assignments_file:
@@ -301,16 +281,13 @@ def get_assignments(assignments_file, show_partitions, graph):
         assignments = {v+1:0 for v in xrange(nx.number_of_nodes(graph))}
     return assignments
 
-def get_hidden_nodes(sub_graphs):
-    hidden_nodes = []
-    for sub_graph in sub_graphs:
-        for node in sub_graph.nodes():
-            if 'hidden' in sub_graph.nodes[node]:
-                hidden_nodes.append((node, sub_graph.nodes[node]['connect']))
-    return hidden_nodes
+def filter_node_order(node_order, assignments):
+    ''' Filter node_order with assignment list '''
+    for node in node_order:
+        if assignments[node] == -1:
+            node_order.remove(node)
 
-def get_node_order(order_file, order_seed, total_node_count, sub_graphs, assignments):
-    ''' Return ordered list of node IDs '''
+def get_node_order(order_file, order_seed, total_node_count):
     if order_file:
         # Extracting node order from file
         node_order = file_io.read_order_file(order_file)
@@ -322,102 +299,7 @@ def get_node_order(order_file, order_seed, total_node_count, sub_graphs, assignm
         node_order = list(range(1, total_node_count + 1)) # 1 to n
         random.seed(order_seed)
         random.shuffle(node_order)
-
-    # Filter node_order with assignment list
-    for node in node_order:
-        if assignments[node] == -1:
-            node_order.remove(node)
-
-    # Get hidden nodes
-    hidden_nodes = get_hidden_nodes(sub_graphs)
-
-    # Add hidden nodes to node_order list
-    for hidden_node, connected_nodes in hidden_nodes:
-        hidden_node_index = max(node_order.index(connected_nodes[0]), node_order.index(connected_nodes[1])) + 1 # hidden node get added after the last of the 2 nodes from the edge it represents
-        node_order.insert(hidden_node_index, hidden_node)
-
-    # Add order as node attribute
-    for sub_graph in sub_graphs:
-        for node in sub_graph.nodes():
-            sub_graph.nodes[node]['order'] = node_order.index(node) + 1 # order starts at 1
-
     return node_order
-
-def get_internal_external_nodes(edge, graph):
-    if edge[0] not in graph.nodes():
-        external_node = edge[0] # node from another partition
-        internal_node = edge[1] # node from current partition
-    elif edge[1] not in graph.nodes():
-        external_node = edge[1]
-        internal_node = edge[0]
-    else:
-        external_node = -1
-        internal_node = -1
-    return internal_node, external_node
-
-def add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments, cut_edge_node_size):
-    # Get cut edges
-    cut_edges = get_cut_edges(input_graph, sub_graphs)
-    # Add cut edges and hidden nodes to partition graphs
-    logging.info("Adding %d cut edges to the partition graphs", len(cut_edges))
-    available_node_id = max(input_graph.nodes()) + 1 # next available node id
-    for sub_graph in sub_graphs:
-        sub_graph_cut_edges = [edge for edge in cut_edges if is_edge_connected_to_graph(edge, sub_graph)]
-        for edge in sub_graph_cut_edges:
-            internal_node, external_node = get_internal_external_nodes(edge, sub_graph)
-            new_node = available_node_id
-            sub_graph.add_node(new_node, hidden=1)
-            available_node_id += 1
-            # add hidden_node attribute to link existing node to hidden node
-            if 'hidden_nodes' in sub_graph.nodes[internal_node]:
-                sub_graph.nodes[internal_node]['hidden_nodes'].append(new_node) # append node to hidden_nodes attribute
-            else:
-                sub_graph.nodes[internal_node]['hidden_nodes'] = [new_node]
-            # add node size attribute
-            sub_graph.nodes[new_node]['size'] = cut_edge_node_size
-            # add partition and connect attributes
-            sub_graph.nodes[new_node]['partition'] = sub_graph.nodes[internal_node]['partition']
-            sub_graph.nodes[new_node]['connect'] = [internal_node, external_node] # add attribute with the 2 nodes from different partitions that the hidden edge is connecting
-            # add edge between existing and new nodes
-            sub_graph.add_edge(internal_node, new_node)
-            # insert node into assignments
-            assignments[new_node] = assignments[internal_node]
-
-def split_graph(input_graph, assignments, partitions):
-    return graph.create_sub_graphs(input_graph, partitions, assignments)
-
-def is_edge_connected_to_graph(edge, graph):
-    return edge[0] in graph.nodes() or edge[1] in graph.nodes()
-
-def is_edge_in_list(edge, edge_list):
-    return edge in edge_list or (edge[1], edge[0]) in edge_list # try both permutations
-
-def get_cut_edges(input_graph, sub_graphs):
-    sub_graph_edges = list(itertools.chain.from_iterable([sub_graph.edges() for sub_graph in sub_graphs]))
-    sub_graph_nodes = list(itertools.chain.from_iterable([sub_graph.nodes() for sub_graph in sub_graphs]))
-    cut_edges = [edge for edge in input_graph.edges()
-                    if edge[0] in sub_graph_nodes
-                    and edge[1] in sub_graph_nodes
-                    and not is_edge_in_list(edge, sub_graph_edges)]
-    return cut_edges
-
-def get_size_per_node(graph, sub_graphs, node_size_mode, node_size, min_node_size, max_node_size):
-    if node_size_mode == 'centrality':
-        centrality_per_node = nx.degree_centrality(graph)
-        min_centrality = min(centrality_per_node.values())
-        max_centrality = max(centrality_per_node.values())
-        interpolator = interpolate.interp1d([min_centrality, max_centrality],[min_node_size, max_node_size], kind='linear')
-        size_per_node = {k:int(interpolator(v)) for k,v in centrality_per_node.items()}
-    elif node_size_mode == 'highlight-new':
-        size_per_node = {node:min_node_size for node in graph.nodes()}
-    else: # fixed
-        size_per_node = {node:node_size for node in graph.nodes()}
-        
-    # Add size as node attribute
-    for sub_graph in sub_graphs:
-        for node in sub_graph.nodes():
-            if node in size_per_node:
-                sub_graph.nodes[node]['size'] = size_per_node[node]
 
 def get_partitions(assignments):
     unique_assignments = set(assignments.values())
@@ -434,23 +316,69 @@ def log_partitions_info(partitions, assignments):
     logging.info("[Number of nodes included: %d]", len([p for _,p in assignments.items() if p != -1]))
     logging.info("[Number of nodes excluded: %d]", len([p for _,p in assignments.items() if p == -1]))
 
-def generate_layouts(sub_graphs, full_graph, output_dir, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, label_type, cut_edge_length, width, height, trailing_frame_count):
+def split_graph(input_graph, assignments, partitions, scheme, order, order_seed, node_size_mode, node_size, min_node_size, max_node_size, cut_edge_node_size):
+    # Create one subgraph per partition
+    sub_graphs = graph.create_sub_graphs(input_graph, partitions, assignments)
+
+    # Add cut edges to subgraphs
+    if scheme == 'cut-edges':
+        graph.add_cut_edges_to_subgraphs(input_graph, sub_graphs, assignments, cut_edge_node_size)
+
+    # Add node order to subgraphs
+    node_order = get_node_order(order, order_seed, nx.number_of_nodes(input_graph))
+    filter_node_order(node_order, assignments) # remove entries from node order that are excluded in assignments
+    graph.add_node_order_to_subgraphs(sub_graphs, node_order)
+
+    # Add node size to subgraphs
+    graph.add_node_size_to_subgraphs(input_graph, sub_graphs, node_size_mode, node_size, min_node_size, max_node_size)
+
+    return sub_graphs
+
+def generate_layout_per_subgraph(sub_graphs, full_graph, output_dir, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color,
+                                 edge_size, label_size, label_type, cut_edge_length, width, height, trailing_frame_count):
+
+    dot_filepaths = create_dgs_file_and_generate_frames(output_dir, sub_graphs, full_graph, label_type, None, trailing_frame_count,
+                                                       layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size,
+                                                       label_size, cut_edge_length, width, height, 'dot')
+
+    # Extract node positions from dot files
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(output_dir, sub_graph, full_graph, label_type, None, trailing_frame_count)
-        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, cut_edge_length, width, height, 'dot') # compute layout from dgs file and write dot file
-        pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True)
+        pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepaths[index], '"pos"', True, True)
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
 
-def filter_visible_graph(graph):
-    visibe_nodes = [node for node in graph.nodes() if not 'hidden' in graph.nodes[node]]
-    return graph.subgraph(visibe_nodes)
+def create_dgs_file_and_generate_frames(output_dir, sub_graphs, full_graph, label_type, colour_attr, trailing_frame_count,
+                                        layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, cut_edge_length, width, height, mode):
+    dot_filepaths = []
+    for index, sub_graph in enumerate(sub_graphs):
+        dgs_file = file_io.write_dgs_file(output_dir, sub_graph, full_graph, label_type, colour_attr, trailing_frame_count)
+        dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode,
+                                       shadow_color, edge_size, label_size, cut_edge_length, width, height, mode)
+        dot_filepaths.append(dot_filepath)
+    return dot_filepaths
+
+def create_clusters(sub_graphs, output_dir, scheme, clustering, cluster_seed, infomap_calls):
+    clusters_per_node_per_graph = []
+    if scheme == 'communities' and clustering != 'graphviz': # gvmap performs its own clustering if clustering=graphviz
+        clusters_per_node_per_graph = perform_clustering(sub_graphs, output_dir, clustering,
+                                                         config['install_dirs']['oslom2'], config['install_dirs']['infomap'],
+                                                         cluster_seed, infomap_calls)
+        # Create local-cluster to global-cluster mapping for gvmap to see each cluster independently
+        cluster.do_local_to_global_cluster_conversion(clusters_per_node_per_graph)
+    elif scheme =='cut-edges':
+        clusters_per_node_per_graph = cluster.cluster_nodes_per_partition(sub_graphs)
+
+    # Add clusters to graph as node attributes
+    if clusters_per_node_per_graph:
+        cluster.add_clusters_to_graph(sub_graphs, clusters_per_node_per_graph)
+
+    return clusters_per_node_per_graph
 
 def perform_clustering(sub_graphs, output_dir, clustering, oslom2_dir, infomap_dir, cluster_seed, infomap_calls):
     clusters_per_node_per_graph = []
     for index, sub_graph in enumerate(sub_graphs):
         logging.info("Performing clustering (%s) on sub-graph %d", clustering, index)
 
-        sub_graph_without_hidden_nodes = filter_visible_graph(sub_graph)
+        sub_graph_without_hidden_nodes = graph.filter_visible_graph(sub_graph)
 
         clusters_per_node = run_clustering(output_dir, clustering, sub_graph_without_hidden_nodes, index, oslom2_dir, infomap_dir, cluster_seed, infomap_calls)
         if clustering != 'graphviz': # clustering done directly by graphviz
@@ -478,22 +406,6 @@ def run_clustering(output, clustering_method, graph, graph_id, oslom2_dir, infom
         level = 1 # lowest hierarchy level
         clusters_per_node = file_io.read_infomap_tree_file(output_tree_file, level) # get cluster(s) from Infomap .tree file
     return clusters_per_node
-    
-def cluster_nodes_per_partition(sub_graphs):
-    full_graph_with_attributes = nx.union_all(sub_graphs)
-    clusters_per_node_per_graph = []
-    for sub_graph in sub_graphs:
-        clusters_per_node = {}
-        for node in sub_graph.nodes(data=True):
-            if 'hidden' in node[1]: # give hidden node the partition of the external node they represent
-                connected_nodes = node[1]['connect']
-                external_node = connected_nodes[1] if connected_nodes[0] in sub_graph.nodes() else connected_nodes[0]
-                partition = full_graph_with_attributes.nodes[external_node]['partition']
-            else:
-                partition = node[1]['partition']
-            clusters_per_node[node[0]] = [partition]
-        clusters_per_node_per_graph.append(clusters_per_node)
-    return clusters_per_node_per_graph
 
 def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, output_dir, gvmap_dir, node_color, color_scheme, color_seed):
     if node_color:
@@ -520,7 +432,7 @@ def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, output
         colors_per_node = color.get_colors_per_node_global(color_per_node, clusters_per_node_per_graph) # combine single color per node (from gvmap) and multiple clusters per node (from OSLOM2) to get multiple colors per node
 
     # add colors to graphs
-    color.add_colors_to_partition_graphs(colors_per_node, sub_graphs)
+    graph.add_node_attribute_to_subgraphs(sub_graphs, 'fillcolor', colors_per_node)
 
 def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mode, shadow_color, edge_size, label_size, cut_edge_length, width, height, mode):
     output_dot_filepath = os.path.join(output, 'partition_{}.dot'.format(p))
@@ -550,102 +462,6 @@ def generate_frames(dgs_file, output, p, layout, seed, force, a, r, node_size_mo
             stderr=subprocess.STDOUT)
     return output_dot_filepath
 
-def create_png_tiles(tiles, border_size, columns, output_png_file):
-    args = ['/usr/bin/montage']
-    args += tiles
-    args += ['-tile', '{}x'.format(columns) , '-geometry', '+0+0', '-border', str(border_size), output_png_file]
-    logging.debug("montage command: %s", ' '.join(args))
-    retval = subprocess.call(
-        args, cwd='.',
-        stderr=subprocess.STDOUT)
-
-def create_svg_tiles(svg_tiles, output_svg_file, width, height, border_size, columns):
-    rows = math.ceil(len(svg_tiles) / columns) # number of rows
-
-    # Add tiles
-    svg_objects = []
-    for index, tile in enumerate(svg_tiles):
-        if tile:
-            # 0-based row and column
-            row = math.floor(index / columns)
-            col = index % columns
-            # width and height offsets
-            width_offset = col * width
-            height_offset = row * height
-            # add tile with offsets
-            svg_objects.append(SVG(tile).move(width_offset, height_offset))
-
-    # Add grid lines
-    total_width = width * columns
-    total_height = height * rows
-    for col in range(0, columns + 1):
-        svg_objects.append(Line([(width * col, 0), (width * col, total_height)], width=border_size, color='silver')) # vertical line
-    for row in range(0, rows + 1):
-        svg_objects.append(Line([(0, height * row), (total_width, height * row)], width=border_size, color='silver')) # horizontal line
-
-    # Create combined svg file from tiles
-    Figure(total_width, total_height,
-       *svg_objects
-       ).save(output_svg_file)
-
-def combine_images_into_tiles(output, partitions, border_size, width, height, fps):
-    logging.info("Combining images into tiles")
-    partitions_count = len(partitions)
-
-    # get all frames
-    frames = {}
-    for p in range(0, partitions_count):
-        path_glob = os.path.join(output, 'frames_partition', 'p{}_*_new.png'.format(p))
-        frames[p] = sorted(glob.glob(path_glob))
-
-    max_frame_count_per_partition = max([len(frames[p]) for p in frames]) # max number of frames per partition
-    extra_blank_frame_count = math.ceil(0.5 * fps) # number of extra blank frames to insert at the start
-    frame_count = max_frame_count_per_partition + extra_blank_frame_count
-
-    # create output folder
-    path_joined = os.path.join(output, 'frames_joined')
-    if not os.path.exists(path_joined):
-        os.makedirs(path_joined)
-
-    # compute number of rows and columns
-    columns = math.ceil(math.sqrt(partitions_count))
-    
-    # create blank frame png
-    blank_frame_path = os.path.join(output, 'frame_blank.png')
-    blank_frame = Image.new('RGB', (width, height), (255, 255, 255)) # create white frame
-    blank_frame.save(blank_frame_path, "PNG")
-
-    # insert white frames at the start to get the same number of frames per partition and start with a few blank frames
-    for p in range(0, partitions_count):
-        frames[p] = [blank_frame_path] * (frame_count - len(frames[p])) + frames[p]
-
-    frame_files_png = []
-    frame_files_svg = []
-    f = 0
-    for _ in xrange(frame_count):
-        try:
-            # get all tiles for current frame (one tile per partition)
-            tiles = [frames[p][f] for p in range(0, partitions_count)]
-
-            # create png tiles
-            png_frame_file = os.path.join(path_joined, 'frame_{0:06d}.png'.format(f))
-            frame_files_png.append(png_frame_file)
-            create_png_tiles(tiles, border_size, columns, png_frame_file)
-
-            # create svg tiles
-            svg_frame_file = os.path.join(path_joined, 'frame_{0:06d}.svg'.format(f))
-            frame_files_svg.append(svg_frame_file)
-            svg_tiles = [os.path.splitext(tile)[0]+'.svg' for tile in tiles] # replace .png by .svg
-            svg_tiles = [svg_tile if os.path.isfile(svg_tile) else '' for svg_tile in svg_tiles ] # replace missing files by blank frames
-            create_svg_tiles(svg_tiles, svg_frame_file, width, height, border_size, columns)
-
-            f += 1
-
-        except IndexError:
-            print('Missing frame p{}_{}'.format(p, f))
-
-    return frame_files_png, frame_files_svg
-
 def create_video_from_tiles(output_directory, video_file, fps):
     logging.info("Creating video %s from tiles", video_file)
     args = ['ffmpeg', '-framerate', str(fps), '-i', 'output/frames_joined/frame_%6d.png', '-pix_fmt', 'yuv420p', '-r', '10', video_file]
@@ -653,30 +469,6 @@ def create_video_from_tiles(output_directory, video_file, fps):
     log_file = os.path.join(output_directory, "ffmpeg.log")
     with open(log_file, "w") as logwriter:
         retval = subprocess.call(args, stdout=logwriter, stderr=subprocess.STDOUT)
-
-def write_png_to_pdf(png_file, output_dir):
-    pdf_file = os.path.join(output_dir, os.path.splitext(os.path.basename(png_file))[0]+'_png.pdf')
-    pdf = fpdf.FPDF('L', 'mm', 'A4')
-    pdf.add_page()
-    pdf.image(png_file, w=277) # 277mm width to center image (default margin = 10mm)
-    pdf.output(pdf_file, "F")
-
-def write_svg_to_pdf(svg_file, output_dir):
-    pdf_file = os.path.join(output_dir, os.path.splitext(os.path.basename(svg_file))[0]+'.pdf')
-    drawing = svg2rlg(svg_file)
-    renderPDF.drawToFile(drawing, pdf_file)
-
-def create_pdfs_from_tiles(output_dir, frame_files_svg, pdf_percentage):
-    pdf_dir = os.path.join(output_dir, 'pdf')
-    if not os.path.exists(pdf_dir):
-        os.makedirs(pdf_dir)
-    # filter frames to be converted to pdfs
-    step = int(pdf_percentage / 100.0 * len(frame_files_svg))
-    logging.info("Exporting every %d frames (every %d%%) as pdf", step, pdf_percentage)
-    filtered_frame_files = list(reversed(frame_files_svg))[0::step]
-    for frame_file in filtered_frame_files:
-        write_png_to_pdf(os.path.splitext(frame_file)[0]+'.png', pdf_dir) # TEMPORARY (for validation)
-        write_svg_to_pdf(frame_file, pdf_dir)
 
 if __name__ == '__main__':
     # Initialize logging
