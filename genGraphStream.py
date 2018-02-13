@@ -16,6 +16,7 @@ from reportlab.graphics import renderPDF
 from svgutils.compose import *
 import networkx as nx
 from scipy import interpolate
+from PIL import Image
 
 import file_io
 import graph
@@ -103,6 +104,8 @@ def parse_arguments():
                         help='output video file with tiled frames')
     video_group.add_argument('--fps', type=int,
                         help='frames per second (default=8)')
+    video_group.add_argument('--padding-time', type=float,
+                        help='padding time in seconds to add extra frames at the end of the video (default=2.0)')                    
     # Pdf
     pdf_group = parent_parser.add_argument_group('pdf options')
     pdf_group.add_argument('--pdf', type=int, default=20, metavar='P',
@@ -154,7 +157,8 @@ def validate_arguments(args):
         errors.append("The --repulsion option is only available with the linlog layout")
     if not args.video and args.fps:
         errors.append("The --fps option is only available with the --video option")
-    # Coloring
+    if not args.video and args.padding_time:
+        errors.append("The --padding-time option is only available with the --video option")
     # Image style
     if args.node_size and args.node_size_mode != 'fixed':
         errors.append("The --node-size option is only available with --node-size-mode fixed")
@@ -171,6 +175,8 @@ def validate_arguments(args):
     # Set default values
     if not args.fps:
         args.fps = 8
+    if not args.padding_time:
+        args.padding_time = 2.0
     if not args.node_size:
         args.node_size = 10
     if not args.min_node_size:
@@ -234,9 +240,10 @@ def run(args, config):
     get_size_per_node(input_graph, sub_graphs, args.node_size_mode, args.node_size, args.min_node_size, args.max_node_size)
 
     # Generate layout of each sub-graph
+    padding_frame_count = math.ceil(args.padding_time * args.fps)
     generate_layouts(sub_graphs, nx.union_all(sub_graphs), args.output_dir, args.layout, args.layout_seed,
                      args.force, args.attraction, args.repulsion,
-                     args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, cut_edge_length, args.width, args.height)
+                     args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, args.label_type, cut_edge_length, args.width, args.height, padding_frame_count)
 
     # Perform clustering of each sub-graph
     if args.scheme =='communities':
@@ -256,14 +263,14 @@ def run(args, config):
 
     # Generate frames for each sub-graph
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(args.output_dir, sub_graph, nx.union_all(sub_graphs), args.label_type, 'fillcolor')
+        dgs_file = file_io.write_dgs_file(args.output_dir, sub_graph, nx.union_all(sub_graphs), args.label_type, 'fillcolor', padding_frame_count)
         generate_frames(dgs_file, args.output_dir, index, args.layout, args.layout_seed,
                         args.force, args.attraction, args.repulsion,
                         args.node_size_mode, args.shadow_color, args.edge_size, args.label_size, cut_edge_length, args.width, args.height, 'images') # compute layout from dgs file and write images
 
     # Combine frames into tiles
     if args.video or args.pdf:
-        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, partitions, args.border_size, args.width, args.height)
+        frame_files_png, frame_files_svg = combine_images_into_tiles(args.output_dir, partitions, args.border_size, args.width, args.height, args.fps)
 
     # Convert frames to video
     if args.video:
@@ -423,9 +430,9 @@ def log_partitions_info(partitions, assignments):
     logging.info("[Number of nodes included: %d]", len([p for _,p in assignments.items() if p != -1]))
     logging.info("[Number of nodes excluded: %d]", len([p for _,p in assignments.items() if p == -1]))
 
-def generate_layouts(sub_graphs, full_graph, output_dir, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, label_type, cut_edge_length, width, height):
+def generate_layouts(sub_graphs, full_graph, output_dir, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, label_type, cut_edge_length, width, height, trailing_frame_count):
     for index, sub_graph in enumerate(sub_graphs):
-        dgs_file = file_io.write_dgs_file(output_dir, sub_graph, full_graph, label_type, None)
+        dgs_file = file_io.write_dgs_file(output_dir, sub_graph, full_graph, label_type, None, trailing_frame_count)
         dot_filepath = generate_frames(dgs_file, output_dir, index, layout, seed, force, attraction, repulsion, node_size_mode, shadow_color, edge_size, label_size, cut_edge_length, width, height, 'dot') # compute layout from dgs file and write dot file
         pos_per_node = graph.get_node_attribute_from_dot_file(dot_filepath, '"pos"', True, True)
         nx.set_node_attributes(sub_graph, name='pos', values=pos_per_node)
@@ -577,7 +584,7 @@ def create_svg_tiles(svg_tiles, output_svg_file, width, height, border_size, col
        *svg_objects
        ).save(output_svg_file)
 
-def combine_images_into_tiles(output, partitions, border_size, width, height):
+def combine_images_into_tiles(output, partitions, border_size, width, height, fps):
     logging.info("Combining images into tiles")
     partitions_count = len(partitions)
 
@@ -587,7 +594,9 @@ def combine_images_into_tiles(output, partitions, border_size, width, height):
         path_glob = os.path.join(output, 'frames_partition', 'p{}_*_new.png'.format(p))
         frames[p] = sorted(glob.glob(path_glob))
 
-    frame_count = max([len(frames[p]) for p in frames]) # max number of frames per partition
+    max_frame_count_per_partition = max([len(frames[p]) for p in frames]) # max number of frames per partition
+    extra_blank_frame_count = math.ceil(0.5 * fps) # number of extra blank frames to insert at the start
+    frame_count = max_frame_count_per_partition + extra_blank_frame_count
 
     # create output folder
     path_joined = os.path.join(output, 'frames_joined')
@@ -596,10 +605,15 @@ def combine_images_into_tiles(output, partitions, border_size, width, height):
 
     # compute number of rows and columns
     columns = math.ceil(math.sqrt(partitions_count))
+    
+    # create blank frame png
+    blank_frame_path = os.path.join(output, 'frame_blank.png')
+    blank_frame = Image.new('RGB', (width, height), (255, 255, 255)) # create white frame
+    blank_frame.save(blank_frame_path, "PNG")
 
-    # insert white frames at the start to get the same number of frames per partition
+    # insert white frames at the start to get the same number of frames per partition and start with a few blank frames
     for p in range(0, partitions_count):
-        frames[p] = ['frame_blank.png'] * (frame_count - len(frames[p])) + frames[p]
+        frames[p] = [blank_frame_path] * (frame_count - len(frames[p])) + frames[p]
 
     frame_files_png = []
     frame_files_svg = []

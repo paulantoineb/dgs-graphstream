@@ -145,16 +145,16 @@ def read_infomap_tree_file(filepath, level):
 
     return node_dict
     
-def get_frame_start_and_count(full_graph, partition):
+def get_frame_start_and_count(full_graph, partition, trailing_frame_count):
     ''' Global frame start and count per node '''
     sorted_nodes = sorted(full_graph.nodes(data=True), key=lambda node: node[1]['order'])
     ordered_assignments = [node[1]['partition'] for node in sorted_nodes]
     partition_frame_start = [i for i, a in enumerate(ordered_assignments) if a == partition] # assignment start indexes for given partition
-    partition_frame_start_extended = partition_frame_start + [len(sorted_nodes)] # add last frame id
+    partition_frame_start_extended = partition_frame_start + [len(sorted_nodes) + trailing_frame_count] # add last frame id with extra trailing frames to give highlighted nodes time to settle
     partition_frame_count = [v2 - v1 for v1, v2 in zip(partition_frame_start_extended, partition_frame_start_extended[1:])] # subtract consecutive frame start values    
     return partition_frame_start, partition_frame_count
 
-def write_dgs_file(output, graph, full_graph, label_type, colour_attr):
+def write_dgs_file(output, graph, full_graph, label_type, colour_attr, trailing_frame_count):
     partition = graph.graph['partition']
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
@@ -164,7 +164,7 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr):
         outf.write("partition_{} 0 0\n".format(partition))
  
         # get partition start and count per node
-        partition_frame_start, partition_frame_count = get_frame_start_and_count(full_graph, partition)
+        partition_frame_start, partition_frame_count = get_frame_start_and_count(full_graph, partition, trailing_frame_count)
         # sort nodes according to node_order
         sorted_nodes = sorted(graph.nodes(data=True), key=lambda node: node[1]['order'])
 
