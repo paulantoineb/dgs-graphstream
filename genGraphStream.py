@@ -67,8 +67,8 @@ def parse_arguments():
     # Coloring
     coloring_group = parent_parser.add_argument_group('coloring options')
     color_mode_group = coloring_group.add_mutually_exclusive_group()
-    color_mode_group.add_argument('--color-scheme', choices=['primary-colors','pastel'], default='primary-colors',
-                        help='color scheme used by gvmap (default=primary-colors)')
+    color_mode_group.add_argument('--color-scheme', choices=['pastel', 'primary-colors'], default='pastel',
+                        help='color scheme used by gvmap (default=pastel)')
     color_mode_group.add_argument('--node-color', metavar='C',
                         help='single color to use for all nodes')
     coloring_group.add_argument('--color-seed', type=int, default=utils.get_random_seed(), metavar='S',
