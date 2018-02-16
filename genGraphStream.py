@@ -43,7 +43,7 @@ def parse_arguments():
     order_group = io_group.add_mutually_exclusive_group()
     order_group.add_argument('-n', '--order',
                         help='node order list')
-    order_group.add_argument('--order-seed',
+    order_group.add_argument('--order-seed', type=int, default=utils.get_random_seed(), metavar='S',
                         help='seed for ordering nodes')
 
     # Layout
@@ -55,9 +55,9 @@ def parse_arguments():
     layout_group.add_argument('--force', type=float, metavar='F',
                         help='force for linlog graph layout (default=3.0)')
     layout_group.add_argument('--attraction', type=float, metavar='A',
-                        help='attraction factor for linlog graph layout (default=0)')
+                        help='attraction factor for graph layout (default=0.06 for springbox, default=0.0 for linlog)')
     layout_group.add_argument('--repulsion', type=float, metavar='R',
-                        help='repulsion factor for linlog graph layout (default=-1.2)')
+                        help='repulsion factor for graph layout (default=0.024 for springbox, default=-1.2 for linlog)')
     # Coloring
     coloring_group = parent_parser.add_argument_group('coloring options')
     color_mode_group = coloring_group.add_mutually_exclusive_group()
@@ -74,11 +74,11 @@ def parse_arguments():
     styling_group.add_argument('--node-size-mode', choices=['fixed', 'centrality', 'highlight-new'], default='fixed',
                         help='node size mode')
     styling_group.add_argument('--node-size', type=int, metavar='S',
-                        help='node size in pixels (default=10). Use with --node-size-mode fixed.')
+                        help='node size in pixels (default=20). Use with --node-size-mode fixed.')
     styling_group.add_argument('--min-node-size', type=int, metavar='S',
-                        help='minimum node size in pixels (default=10). Use with --node-size-mode centrality or highlight-new.')
+                        help='minimum node size in pixels (default=20). Use with --node-size-mode centrality or highlight-new.')
     styling_group.add_argument('--max-node-size', type=int, metavar='S',
-                        help='maximum node size in pixels (default=40). Use with --node-size-mode centrality or highlight-new.')
+                        help='maximum node size in pixels (default=60). Use with --node-size-mode centrality or highlight-new.')
     styling_group.add_argument('--edge-size', type=int, default=1, metavar='S',
                         help='edge size in pixels (default=1)')
     styling_group.add_argument('--label-size', type=int, default=10, metavar='S',
@@ -148,10 +148,6 @@ def validate_arguments(args):
     # Layout
     if args.layout != 'linlog' and args.force:
         errors.append("The --force option is only available with the linlog layout")
-    if args.layout != 'linlog' and args.attraction:
-        errors.append("The --attraction option is only available with the linlog layout")
-    if args.layout != 'linlog' and args.repulsion:
-        errors.append("The --repulsion option is only available with the linlog layout")
     if not args.video and args.fps:
         errors.append("The --fps option is only available with the --video option")
     if not args.video and args.padding_time:
@@ -171,16 +167,26 @@ def validate_arguments(args):
         sys.exit(1)
 
     # Set default values
+    if args.layout == 'springbox':
+        if not args.attraction:
+            args.attraction = 0.06
+        if not args.repulsion:
+            args.repulsion = 0.024
+    elif args.layout == 'linlog':
+        if not args.attraction:
+            args.attraction = 0.0
+        if not args.repulsion:
+            args.repulsion = -1.2
     if not args.fps:
         args.fps = 8
     if not args.padding_time:
         args.padding_time = 2.0
     if not args.node_size:
-        args.node_size = 10
+        args.node_size = 20
     if not args.min_node_size:
-        args.min_node_size = 10
+        args.min_node_size = 20
     if not args.min_node_size:
-        args.max_node_size = 40
+        args.max_node_size = 60
     if args.scheme == 'communities':
         if not args.cluster_seed:
             args.cluster_seed = utils.get_random_seed()

@@ -220,8 +220,23 @@ public class DgsGraphStreamAnimate extends SinkAdapter {
         } else {
             SpringBox layout = new SpringBox(false, new Random(seed));
             layout.setQuality(1);
+            
+            try {
+                SetLayoutVariable(layout, "K1", a); // attraction
+                SetLayoutVariable(layout, "K2", r); // repulsion
+            } catch (Exception e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
+            
             return layout;
         }
+    }
+    
+    private void SetLayoutVariable(SpringBox layout, String variable, double value) throws NoSuchFieldException, IllegalAccessException {
+        Field field = getField(layout.getClass(), variable);
+        field.setAccessible(true);
+        field.set(layout, value);
     }
 
     /**
