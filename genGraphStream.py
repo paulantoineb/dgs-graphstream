@@ -169,7 +169,7 @@ def validate_arguments(args):
     # Set default values
     if args.layout == 'springbox':
         if not args.attraction:
-            args.attraction = 0.06
+            args.attraction = 0.012
         if not args.repulsion:
             args.repulsion = 0.024
     elif args.layout == 'linlog':
