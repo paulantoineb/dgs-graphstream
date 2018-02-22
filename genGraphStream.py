@@ -9,6 +9,7 @@ import subprocess
 import random
 import math
 import networkx as nx
+import nxmetis
 
 import file_io
 import graph
@@ -36,16 +37,30 @@ def parse_arguments():
                         help='output directory')
     # Input/output files
     io_group = parent_parser.add_argument_group('input/outputs options')
-    io_group.add_argument('-a', '--assignments',
-                        help='partition assignments list')
-    io_group.add_argument('--show-partitions', nargs='+', type=int,
-                        help='partitions to be displayed (based on partition values in assignments list)')
     order_group = io_group.add_mutually_exclusive_group()
     order_group.add_argument('-n', '--order',
                         help='node order list')
     order_group.add_argument('--order-seed', type=int, default=utils.get_random_seed(), metavar='S',
                         help='seed for ordering nodes')
-
+    io_group.add_argument('--filter',
+                        help='filter node list (-1 to exclude node)')
+    io_group.add_argument('--node-weight', default='weight', metavar='W',
+                        help='attribute used to determine the weight of each node (default=\'weight\')')
+    io_group.add_argument('--edge-weight', default='weight', metavar='W',
+                        help='attribute used to determine the weight of each edge (default=\'weight\')')
+    # Partitioning
+    partitioning_group = parent_parser.add_argument_group('partitioning options')
+    partitioning_type_group = partitioning_group.add_mutually_exclusive_group()
+    partitioning_type_group.add_argument('-a', '--assignments',
+                        help='partition assignments list')
+    partitioning_type_group.add_argument('--nparts', type=int, metavar='P',
+                        help='number of partitions to generate with METIS')
+    partitioning_group.add_argument('--ubvec', type=float, metavar='U',
+                        help='allowed load imbalance among partitions in METIS (default=1.001). The load imbalance must be greater than 1.0, 1.2 indicates a desired maximum load imbalance of 20%.')
+    partitioning_group.add_argument('--tpwgts', nargs='+', type=float, metavar='T',
+                        help='desired weight for each partition in METIS. The sum of tpwgts[] must be 1.0')
+    partitioning_group.add_argument('--show-partitions', nargs='+', type=int,
+                        help='partitions to be displayed (based on nparts or partition values in assignments list)')
     # Layout
     layout_group = parent_parser.add_argument_group('layout options')
     layout_group.add_argument('--layout', '-l', choices=['springbox','linlog'], default='springbox',
@@ -133,8 +148,18 @@ def parse_arguments():
 def validate_arguments(args):
     errors = []
     # Partitioning
-    if args.show_partitions and not args.assignments:
-        errors.append("The --show-partitions option is only available when a partition assignments list is provided")
+    if args.nparts != None and args.nparts <= 1:
+        errors.append("The --nparts value must be greater than 1")
+    if args.ubvec != None and args.nparts == None:
+        errors.append("The --ubvec option is only available with the --nparts option")
+    if args.ubvec != None and args.ubvec <= 1.0:
+        errors.append("The --ubvec value must be greater than 1.0")
+    if args.tpwgts and not args.nparts:
+        errors.append("The --tpwgts option is only available with the --nparts option")
+    if args.tpwgts and args.nparts and len(args.tpwgts) != args.nparts:
+        errors.append("The --tpwgts option requires a list of {} values (one value per partition)".format(args.nparts))
+    if args.tpwgts and sum(args.tpwgts) != 1.0:
+        errors.append("The sum of --tpwgts values must be 1.0")
     # Clustering
     if args.scheme == 'communities':
         if args.clustering == 'graphviz' and args.cluster_seed:
@@ -202,6 +227,8 @@ def validate_arguments(args):
         args.cut_edge_length = 0
     if not 'cut_edge_node_size' in args:
         args.cut_edge_node_size = 0
+    if not args.ubvec:
+        args.ubvec = 1.0
 
 def parse_config_file(config_file):
     logging.debug("Reading the config file %s", config_file)
@@ -234,7 +261,7 @@ def run(args, config):
     logging.info("The input graph contains %d nodes and %d edges", nx.number_of_nodes(input_graph), nx.number_of_edges(input_graph))
 
     # Read assignments file
-    assignments = get_assignments(args.assignments, args.show_partitions, input_graph)
+    assignments = get_assignments(args.assignments, args.show_partitions, args.filter, input_graph, args.nparts, args.ubvec, args.tpwgts, args.node_weight, args.edge_weight)
     partitions = get_partitions(assignments) # Getting partitions from the assignments
     log_partitions_info(partitions, assignments)
 
@@ -251,7 +278,7 @@ def run(args, config):
     clusters_per_node_per_graph = create_clusters(sub_graphs, args.output_dir, args.scheme, args.clustering, args.cluster_seed, args.infomap_calls)
 
     # Perform coloring
-    perform_coloring(input_graph, sub_graphs, clusters_per_node_per_graph, args.output_dir, config['install_dirs']['gvmap'], args.node_color, args.color_scheme, args.color_seed)
+    perform_coloring(sub_graphs, clusters_per_node_per_graph, args.output_dir, config['install_dirs']['gvmap'], args.node_color, args.color_scheme, args.color_seed)
 
     # Generate frames for each sub-graph
     create_dgs_file_and_generate_frames(args.output_dir, sub_graphs, nx.union_all(sub_graphs), args.label_type, 'fillcolor', padding_frame_count,
@@ -270,21 +297,67 @@ def run(args, config):
     if args.pdf:
         image.create_pdfs_from_tiles(args.output_dir, frame_files_svg, args.pdf)
 
-def get_assignments(assignments_file, show_partitions, graph):
+def get_assignments_from_file(assignments_file, graph):
+    # Extracting assignments from file
+    assignments = file_io.read_assignments_file(assignments_file)
+    logging.info("%d assignments were found", len(assignments))
+    if len(assignments) != nx.number_of_nodes(graph):
+        logging.warning("The assignments file doesn't contain the same number of lines than the number of nodes in the graph") 
+    return assignments
+    
+def filter_graph(graph, filter_file):
+    if not filter_file:
+        return graph       
+    # Extracting filtered nodes from file
+    filter_values = file_io.read_assignments_file(filter_file)
+    if len(filter_values) != nx.number_of_nodes(graph):
+        logging.warning("The filter file doesn't contain the same number of lines than the number of nodes in the graph")
+    filtered_nodes = [n for n,p in filter_values.items() if p != -1]
+    # Filtering graph
+    filtered_graph = graph.subgraph(filtered_nodes)    
+    return filtered_graph
+        
+def get_assignments_from_metis(graph, filter_file, nparts, ubvec, tpwgts, node_weight, edge_weight):
+    filtered_graph = filter_graph(graph, filter_file)
+    # Run partitioning with METIS
+    assignments = run_metis_partitioning(filtered_graph, nparts, ubvec, tpwgts, node_weight, edge_weight)
+    # Add excluded nodes to assignments
+    for node in graph.nodes():
+        if not node in assignments:
+            assignments[node] = -1
+    return assignments
+        
+def get_assignments(assignments_file, show_partitions, filter_file, graph, nparts, ubvec, tpwgts, node_weight, edge_weight):
+    # Get assignments
     if assignments_file:
-        # Extracting assignments from file
-        assignments = file_io.read_assignments_file(assignments_file)
-        logging.info("%d assignments were found", len(assignments))
-        if len(assignments) != nx.number_of_nodes(graph):
-            logging.warning("The assignments file doesn't contain the same number of lines than the number of nodes in the graph")
-        # Hide partitions according to show_partitions list
-        if show_partitions:
-            hidden_partitions = list(set(assignments.values()) - set(show_partitions + [-1]))
-            logging.info("Filtering out partitions %s not in show-partitions list %s", hidden_partitions, show_partitions)
-            assignments = {k:(a if a in show_partitions else -1) for k,a in assignments.items()}
+        assignments = get_assignments_from_file(assignments_file, graph)
+    elif nparts:
+        assignments = get_assignments_from_metis(graph, filter_file, nparts, ubvec, tpwgts, node_weight, edge_weight)
     else:
-        # Add all nodes to a single partition
-        assignments = {v+1:0 for v in xrange(nx.number_of_nodes(graph))}
+        assignments = {v:0 for v in xrange(nx.number_of_nodes(graph))} # add all nodes to a single partition
+    # Hide partitions in assignments according to show_partitions list
+    if show_partitions:
+        hidden_partitions = list(set(assignments.values()) - set(show_partitions + [-1]))
+        logging.info("Filtering out partitions %s not in show-partitions list %s", hidden_partitions, show_partitions)
+        assignments = {k:(a if a in show_partitions else -1) for k,a in assignments.items()}
+    return assignments
+    
+def run_metis_partitioning(graph, nparts, ubvec, tpwgts, node_weight, edge_weight):
+    # Format metis parameters
+    if tpwgts != None:
+        tpwgts=[[val] for val in tpwgts]
+    ubvec=[ubvec]
+    # Run metis
+    logging.info("Partitioning the graph using METIS (nparts=%s, ubvec=%s, tpwgts=%s, node_weight=%s, edge_weight=%s)", nparts, ubvec, tpwgts, node_weight, edge_weight)  
+    output = nxmetis.partition(graph, nparts, node_weight=node_weight, edge_weight=edge_weight, tpwgts=tpwgts, ubvec=ubvec)
+    objval = output[0]
+    partitions = output[1]
+    logging.info("The graph was partitioned into %s partitions by METIS (objval=%s)", len(partitions), objval) 
+    # Create assignments
+    assignments = {}
+    for index, partition in enumerate(partitions):
+        for node in partition:
+            assignments[node] = index # node IDs start at 0, partition IDs start at 0
     return assignments
 
 def filter_node_order(node_order, assignments):
@@ -302,7 +375,7 @@ def get_node_order(order_file, order_seed, total_node_count):
             logging.warning("The node order file doesn't contain the same number of lines than the number of nodes in the graph")
     else:
         # Generate random order
-        node_order = list(range(1, total_node_count + 1)) # 1 to n
+        node_order = list(range(total_node_count)) # 0 to n-1
         random.seed(order_seed)
         random.shuffle(node_order)
     return node_order
@@ -413,9 +486,9 @@ def run_clustering(output, clustering_method, graph, graph_id, oslom2_dir, infom
         clusters_per_node = file_io.read_infomap_tree_file(output_tree_file, level) # get cluster(s) from Infomap .tree file
     return clusters_per_node
 
-def perform_coloring(full_graph, sub_graphs, clusters_per_node_per_graph, output_dir, gvmap_dir, node_color, color_scheme, color_seed):
+def perform_coloring(sub_graphs, clusters_per_node_per_graph, output_dir, gvmap_dir, node_color, color_scheme, color_seed):
     if node_color:
-        colors_per_node = {node:node_color for node in full_graph.nodes()}
+        colors_per_node = {node:node_color for node in nx.union_all(sub_graphs).nodes()}
     else:
         # Add width and height attributes (required by gvmap)
         for sub_graph in sub_graphs:

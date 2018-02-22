@@ -10,7 +10,7 @@ import utils
 def read_metis(file):
     logging.info("Reading METIS file %s", file)
 
-    G = nx.Graph()
+    G = nx.Graph() # create undirected graph
 
     # add node weights from METIS file
     with open(file, "r") as metis:
@@ -19,6 +19,7 @@ def read_metis(file):
         first_line = None
         has_edge_weights = False
         has_node_weights = False
+        n_vertex_weights = 1
         for i, line in enumerate(metis):
             if line[0] == '%':
                 # ignore comments
@@ -47,6 +48,12 @@ def read_metis(file):
                         has_node_weights = True
                     else:
                         assert False, "File format not supported"
+                if len(first_line) > 3:
+                    #  NCON, it appears, is the number of vertex weights.  Normally,
+                    #  if vertex weights are used, there is only one weight per vertex,
+                    #  and it is not even necessary to list NCON in the input.  But if
+                    #  multiple values are associated with a vertex, NCON must be listed.
+                    n_vertex_weights = int(first_line[3])
                 continue
 
             # METIS starts node count from 1, here we start from 0 by
@@ -55,21 +62,44 @@ def read_metis(file):
             if line.strip():
                 e = line.split()
                 if has_edge_weights and has_node_weights:
-                    if len(e) > 2:
+                    node_weights = e[0:n_vertex_weights]
+                    if len(e) > n_vertex_weights:
                         # create weighted edge list:
                         #  [(1, 2, {'weight':'2'}), (1, 3, {'weight':'8'})]
-                        edges_split = list(zip(*[iter(e[1:])] * 2))
+                        edges = e[n_vertex_weights:]
+                        edges_split = list(zip(*[iter(edges)] * 2))
                         edge_list = [(n, int(v[0]) - 1, {'weight': int(v[1])}) for v in edges_split]
 
                         G.add_edges_from(edge_list)
-                        G.node[n]['weight'] = int(e[0])
+                        G.node[n]['weight'] = int(node_weights[0]) # use 1st node weight
                     else:
                         # no edges
-                        G.add_nodes_from([n], weight=int(e[0]))
+                        G.add_nodes_from([n], weight=int(node_weights[0])) # use 1st node weight
 
                 elif has_edge_weights and not has_node_weights:
-                    pass
+                    n_vertex_weights = 0
+                    if len(e) > 0:
+                        # create weighted edge list:
+                        #  [(1, 2, {'weight':'2'}), (1, 3, {'weight':'8'})]
+                        edges = e[n_vertex_weights:]
+                        edges_split = list(zip(*[iter(edges)] * 2))
+                        edge_list = [(n, int(v[0]) - 1, {'weight': int(v[1])}) for v in edges_split]
+
+                        G.add_edges_from(edge_list)
+                        G.node[n]['weight'] = 1.0
+                    else:
+                        # no edges
+                        G.node[n]['weight'] = 1.0
                 elif not has_edge_weights and has_node_weights:
+                    node_weights = e[0:n_vertex_weights]
+                    if len(e) > n_vertex_weights:
+                        edges = e[n_vertex_weights:]
+                        edge_list = [(n, int(v) - 1, {'weight':1.0}) for v in edges]
+                        G.add_edges_from(edge_list)
+                        G.node[n]['weight'] = int(node_weights[0]) # use 1st node weight
+                    else:
+                        # no edges
+                        G.add_nodes_from([n], weight=int(node_weights[0]))
                     pass
                 else:
                     edge_list = [(n, int(v) - 1, {'weight':1.0}) for v in e]
@@ -102,7 +132,7 @@ def read_graph_from_file(file, format):
 def read_assignments_file(file):
     logging.info("Reading assignments file %s", file)
     with open(file, 'r') as f:
-        return {i+1:int(l.strip()) for i,l in enumerate(f.readlines())}
+        return {i:int(l.strip()) for i,l in enumerate(f.readlines())}
 
 def read_order_file(file):
     logging.info("Reading order file %s", file)
@@ -158,7 +188,6 @@ def write_dgs_file(output, graph, full_graph, label_type, colour_attr, trailing_
     partition = graph.graph['partition']
     filename = os.path.join(output, 'partition_{}.dgs'.format(partition))
     logging.info("Writing DGS file %s (partition %d)", filename, partition)
-
     with open(filename, 'w') as outf:
         outf.write("DGS004\n")
         outf.write("partition_{} 0 0\n".format(partition))
