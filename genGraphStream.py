@@ -21,11 +21,13 @@ import image
 DGSGS_JAR = 'dgs-graphstream/dist/dgs-graphstream.jar'
 
 def parse_arguments():
-    parent_parser = argparse.ArgumentParser(add_help=False, description=
+    parent_parser = argparse.ArgumentParser(description=
         '''Create animation of network partition assignments. First processes
         network file and assignments into DGS file format, then uses
         GraphStream to animate each frame, finally frames are stitched together.'''
     )
+    parent_parser.add_argument("-v", "--verbose", action="store_true",
+                        help="increase output verbosity")
 
     # Required arguments
     required_group = parent_parser.add_argument_group('required arguments')
@@ -43,7 +45,7 @@ def parse_arguments():
     order_group.add_argument('--order-seed', type=int, default=utils.get_random_seed(), metavar='S',
                         help='seed for ordering nodes')
     io_group.add_argument('--filter',
-                        help='filter node list (-1 to exclude node)')
+                        help='filter node list (<= 0 to exclude node)')
     io_group.add_argument('--node-weight', default='weight', metavar='W',
                         help='attribute used to determine the weight of each node (default=\'weight\')')
     io_group.add_argument('--edge-weight', default='weight', metavar='W',
@@ -56,7 +58,7 @@ def parse_arguments():
     partitioning_type_group.add_argument('--nparts', type=int, metavar='P',
                         help='number of partitions to generate with METIS')
     partitioning_group.add_argument('--ubvec', type=float, metavar='U',
-                        help='allowed load imbalance among partitions in METIS (default=1.001). The load imbalance must be greater than 1.0, 1.2 indicates a desired maximum load imbalance of 20%.')
+                        help='allowed load imbalance among partitions in METIS (default=1.001). The load imbalance must be greater than 1.0, 1.2 indicates a desired maximum load imbalance of 20 percents.')
     partitioning_group.add_argument('--tpwgts', nargs='+', type=float, metavar='T',
                         help='desired weight for each partition in METIS. The sum of tpwgts[] must be 1.0')
     partitioning_group.add_argument('--show-partitions', nargs='+', type=int,
@@ -119,33 +121,36 @@ def parse_arguments():
     pdf_group.add_argument('--pdf', type=int, default=20, metavar='P',
                         help='Percentage of frames to convert to pdf (default=20)')
 
-    # Sub-commands
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest='scheme', help='select scheme to highlight either communities or cut edges')
-    subparsers.required = True
-    parser_communities = subparsers.add_parser('communities', parents = [parent_parser],
-                                      help='highlight communities')
-    parser_cut_edges = subparsers.add_parser('cut-edges', parents = [parent_parser],
-                                      help='highlight cut edges')
-
+    # Scheme
+    scheme_group = parent_parser.add_argument_group('scheme option')
+    scheme_group.add_argument('-s', '--scheme', choices=['communities', 'cut-edges'], default='communities',
+                    help='scheme to highlight either communities or cut edges (default=communities)')
+    
     # Clustering
-    clustering_group = parser_communities.add_argument_group('clustering options')
-    clustering_group.add_argument('--clustering', '-c', choices=['oslom2','infomap','graphviz'], default='oslom2',
-                        help='clustering method')
+    clustering_group = parent_parser.add_argument_group('communities options (only for scheme=communities)')
+    clustering_group.add_argument('--clustering', '-c', choices=['oslom2','infomap','graphviz'],
+                        help='clustering method (default=oslom2)')
     clustering_group.add_argument('--cluster-seed', type=int, metavar='S',
                         help='seed for clustering')
     clustering_group.add_argument('--infomap-calls', type=int, metavar='C',
                         help='number of times infomap is called within oslom2. Good values are between 1 and 10 (default=0)')
 
     # Cut edges
-    parser_cut_edges.add_argument('--cut-edge-length', type=int, default=50, metavar='L',
+    cut_edges_group = parent_parser.add_argument_group('cut-edges options (only for scheme=cut-edges)')
+    cut_edges_group.add_argument('--cut-edge-length', type=int, metavar='L',
                         help='length of cut edges as percentage of original length (default=50)')
-    parser_cut_edges.add_argument('--cut-edge-node-size', default=5, metavar='S',
+    cut_edges_group.add_argument('--cut-edge-node-size', metavar='S',
                         help='size of the nodes attached to cut edges (default=10)')
 
-    return parser.parse_args()
+    return parent_parser.parse_args()
 
 def validate_arguments(args):
+    # Initialize the logging
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
+    else:
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
     errors = []
     # Partitioning
     if args.nparts != None and args.nparts <= 1:
@@ -162,14 +167,24 @@ def validate_arguments(args):
         errors.append("The sum of --tpwgts values must be 1.0")
     # Clustering
     if args.scheme == 'communities':
-        if args.clustering == 'graphviz' and args.cluster_seed:
+        if args.clustering and args.clustering == 'graphviz' and args.cluster_seed:
             errors.append("The --cluster-seed option is not available with the graphviz clustering method")
-        if args.clustering != 'oslom2' and args.infomap_calls:
+        if args.clustering and args.clustering != 'oslom2' and args.infomap_calls:
             errors.append("The --infomap-calls option is only available with the oslom2 clustering method")
+        if args.cut_edge_length:
+            errors.append("The --cut-edge-length option is only available with the cut-edges scheme")
+        if args.cut_edge_node_size:
+            errors.append("The --cut-edge-node-size option is only available with the cut-edges scheme")
     # Cut edges
     if args.scheme == 'cut-edges':
-        if args.cut_edge_length < 0 or args.cut_edge_length > 100:
+        if args.cut_edge_length and (args.cut_edge_length < 0 or args.cut_edge_length > 100):
             errors.append("The --cut-edge-length value must be between 0 and 100")
+        if args.clustering:
+            errors.append("The --clustering option is only available with the communities scheme")
+        if args.cluster_seed:
+            errors.append("The --cluster-seed option is only available with the communities scheme")
+        if args.infomap_calls:
+            errors.append("The --infomap-calls option is only available with the communities scheme")
     # Layout
     if args.layout != 'linlog' and args.force:
         errors.append("The --force option is only available with the linlog layout")
@@ -190,7 +205,7 @@ def validate_arguments(args):
         for error in errors:
             logging.error(error)
         sys.exit(1)
-
+    
     # Set default values
     if args.layout == 'springbox':
         if not args.attraction:
@@ -213,20 +228,19 @@ def validate_arguments(args):
     if not args.min_node_size:
         args.max_node_size = 60
     if args.scheme == 'communities':
+        if not args.clustering:
+            args.clustering = 'oslom2'
         if not args.cluster_seed:
             args.cluster_seed = utils.get_random_seed()
         if not args.infomap_calls:
             args.infomap_calls = 0
-    if not 'clustering' in args:
-        args.clustering = None
-    if not 'cluster_seed' in args:
-        args.cluster_seed = 0
-    if not 'infomap_calls' in args:
-        args.infomap_calls = 0
-    if not 'cut_edge_length' in args:
-        args.cut_edge_length = 0
-    if not 'cut_edge_node_size' in args:
-        args.cut_edge_node_size = 0
+    if args.scheme == 'cut-edges':
+        if not args.cut_edge_length:
+            args.cut_edge_length = 50
+        if not args.cut_edge_node_size:
+            args.cut_edge_node_size = 5
+    if not args.cut_edge_length:
+        args.cut_edge_length = 0 # to avoid passing None to Graphstream
     if not args.ubvec:
         args.ubvec = 1.0
 
@@ -261,7 +275,7 @@ def run(args, config):
     logging.info("The input graph contains %d nodes and %d edges", nx.number_of_nodes(input_graph), nx.number_of_edges(input_graph))
 
     # Read assignments file
-    assignments = get_assignments(args.assignments, args.show_partitions, args.filter, input_graph, args.nparts, args.ubvec, args.tpwgts, args.node_weight, args.edge_weight)
+    assignments = get_assignments(args.assignments, args.show_partitions, args.filter, args.order, input_graph, args.nparts, args.ubvec, args.tpwgts, args.node_weight, args.edge_weight)
     partitions = get_partitions(assignments) # Getting partitions from the assignments
     log_partitions_info(partitions, assignments)
 
@@ -312,7 +326,7 @@ def filter_graph(graph, filter_file):
     filter_values = file_io.read_assignments_file(filter_file)
     if len(filter_values) != nx.number_of_nodes(graph):
         logging.warning("The filter file doesn't contain the same number of lines than the number of nodes in the graph")
-    filtered_nodes = [n for n,p in filter_values.items() if p != -1]
+    filtered_nodes = [n for n,p in filter_values.items() if p > 0]
     # Filtering graph
     filtered_graph = graph.subgraph(filtered_nodes)    
     return filtered_graph
@@ -327,7 +341,7 @@ def get_assignments_from_metis(graph, filter_file, nparts, ubvec, tpwgts, node_w
             assignments[node] = -1
     return assignments
         
-def get_assignments(assignments_file, show_partitions, filter_file, graph, nparts, ubvec, tpwgts, node_weight, edge_weight):
+def get_assignments(assignments_file, show_partitions, filter_file, order_file, graph, nparts, ubvec, tpwgts, node_weight, edge_weight):
     # Get assignments
     if assignments_file:
         assignments = get_assignments_from_file(assignments_file, graph)
@@ -551,7 +565,7 @@ def create_video_from_tiles(output_directory, video_file, fps):
 
 if __name__ == '__main__':
     # Initialize logging
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    #logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     # Parse arguments
     args = parse_arguments()
