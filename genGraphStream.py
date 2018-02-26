@@ -33,7 +33,7 @@ def parse_arguments():
     required_group = parent_parser.add_argument_group('required arguments')
     required_group.add_argument('-g', '--graph', required=True,
                         help='input graph file')
-    required_group.add_argument('-f', '--format', choices=['metis', 'edgelist'], required=True,
+    required_group.add_argument('-f', '--format', choices=['metis', 'edgelist', 'gml'], required=True,
                         help='format of the input graph file')
     required_group.add_argument('-o', '--output_dir', required=True,
                         help='output directory')

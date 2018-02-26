@@ -119,6 +119,13 @@ def read_metis(file):
 def read_edgelist(file):
     logging.info("Reading edgelist file %s", file)
     return nx.read_edgelist(file)
+    
+def read_gml(file):
+    logging.info("Reading gml file %s", file)
+    return nx.read_gml(file, label='id')
+    
+def relabel_nodes(graph):
+    graph = nx.relabel_nodes(graph, {node:utils.to_int(node) for node in graph.nodes()}) # relabel nodes as integers
 
 def read_graph_from_file(file, format):
     graph = None
@@ -126,7 +133,10 @@ def read_graph_from_file(file, format):
         graph = read_metis(file)
     elif format == 'edgelist':
         graph = read_edgelist(file)
-        graph = nx.relabel_nodes(graph, {node:utils.to_int(node) for node in graph.nodes()})# relabel nodes as integers
+        relabel_nodes(graph)
+    elif format == 'gml':
+        graph = read_gml(file)
+        relabel_nodes(graph)
     return graph
 
 def read_assignments_file(file):
